@@ -1,11 +1,12 @@
+# dashboard/main.py
 from __future__ import annotations
 
 import asyncio
 from datetime import datetime
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
-
 from loguru import logger
 
 from src.engine import engine
@@ -25,8 +26,16 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup_event():
+    """
+    Start the MEMESNIPR engine when the FastAPI app starts.
+
+    IMPORTANT:
+    We await engine.start() here so the engine's own background task
+    is registered cleanly on the event loop. We do NOT wrap it in an
+    extra asyncio.create_task(), because engine.start() already does that.
+    """
     logger.info("Starting MEMESNIPR dashboard + engine")
-    asyncio.create_task(engine.start())
+    await engine.start()
 
 
 @app.get("/health")
@@ -116,7 +125,8 @@ async def root():
             margin-top: 1.2rem;
           }}
           code {{
-            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+                         "Liberation Mono", "Courier New", monospace;
             background: rgba(15,23,42,0.95);
             padding: 0.2rem 0.4rem;
             border-radius: 0.4rem;
@@ -131,7 +141,10 @@ async def root():
               {state.status}
             </span>
           </h1>
-          <p class="muted">Solana meme sniper &amp; safety-first engine (structure online, logic ready to wire to DEX).</p>
+          <p class="muted">
+            Solana meme sniper &amp; safety-first engine
+            (structure online, logic ready to wire to DEX).
+          </p>
           <div class="grid">
             <div class="pill">
               <div class="label">Mode</div>
@@ -165,8 +178,9 @@ async def root():
             </div>
           </div>
           <p class="muted">
-            Engine runs as a background loop. Start simple by leaving <code>scan_candidates()</code> empty
-            (no live trades), then wire in Solana DEX + wallet calls once you like the behavior.
+            Engine runs as a background loop. Start simple by leaving
+            <code>scan_candidates()</code> in simulation mode (no live trades),
+            then wire in Solana DEX + wallet calls once you like the behavior.
           </p>
         </div>
       </body>
