@@ -1,189 +1,282 @@
-# dashboard/main.py
+# src/engine.py
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+import uuid
+from datetime import datetime, timezone
+from typing import List
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
 from loguru import logger
 
-from src.engine import engine
-from src.storage import load_engine_state
-
-
-app = FastAPI(title="MEMESNIPR v1", version="0.1.0")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+from .config import settings
+from .models import (
+    EngineState,
+    EngineStatus,
+    TokenCandidate,
+    Position,
+    PositionStatus,
+    TradeLogEntry,
 )
+from .safety import evaluate_safety
+from .scoring import compute_confidence_components
+from .risk import (
+    compute_position_size_sol,
+    compute_max_open_exposure_pct,
+    is_trading_halted,
+    get_wallet_balance_sol,
+)
+from .storage import load_engine_state, save_engine_state, append_trade_logs
 
 
-@app.on_event("startup")
-async def startup_event():
+class MemeSniprEngine:
     """
-    Start the MEMESNIPR engine when the FastAPI app starts.
+    Core MEMESNIPR engine.
 
-    IMPORTANT:
-    We await engine.start() here so the engine's own background task
-    is registered cleanly on the event loop. We do NOT wrap it in an
-    extra asyncio.create_task(), because engine.start() already does that.
+    v1 focuses on structure + simulation:
+
+    - Background loop every 10s
+    - "Scans" for tokens (currently simulated)
+    - Runs safety + scoring
+    - Decides whether to (simulated) buy
+    - Maintains EngineState heartbeat for the dashboard
+
+    Later you will:
+    - Replace `scan_candidates()` with a real Solana DEX feed
+    - Wire `_open_position` / `_update_positions` to real wallet & prices
     """
-    logger.info("Starting MEMESNIPR dashboard + engine")
-    await engine.start()
+
+    def __init__(self):
+        self.state: EngineState = load_engine_state()
+        self.positions: dict[str, Position] = {}
+        self._lock = asyncio.Lock()
+
+    async def start(self):
+        logger.info("Starting MEMESNIPR engine in mode {}", self.state.mode)
+        asyncio.create_task(self._loop())
+
+    async def _loop(self):
+        while True:
+            try:
+                async with self._lock:
+                    await self._tick()
+            except Exception as e:
+                logger.exception("Engine tick failed: {}", e)
+                self.state.status = EngineStatus.ERROR
+                self.state.last_error = str(e)
+                save_engine_state(self.state)
+
+            await asyncio.sleep(10)  # main heartbeat interval
+
+    async def _tick(self):
+        self._update_heartbeat()
+
+        if is_trading_halted(self.state):
+            if self.state.status != EngineStatus.HALTED:
+                logger.warning(
+                    "Trading halted. daily_losses={}, halted_reason={}",
+                    self.state.daily_losses,
+                    self.state.halted_reason,
+                )
+            self.state.status = EngineStatus.HALTED
+            save_engine_state(self.state)
+            return
+
+        # Respect a max trades per day guard as well
+        if self.state.daily_trades >= settings.MAX_TRADES_PER_DAY:
+            if self.state.status != EngineStatus.IDLE:
+                logger.info(
+                    "Max trades per day reached ({}). Engine idling.",
+                    settings.MAX_TRADES_PER_DAY,
+                )
+            self.state.status = EngineStatus.IDLE
+            save_engine_state(self.state)
+            return
+
+        self.state.status = EngineStatus.SCANNING
+        save_engine_state(self.state)
+
+        # 1) Scan for new opportunities
+        candidates = await self.scan_candidates()
+
+        # 2) Evaluate each candidate
+        for token in candidates:
+            await self._process_candidate(token)
+
+        # 3) Manage open positions (stub)
+        await self._update_positions()
+
+        self.state.status = EngineStatus.IDLE
+        save_engine_state(self.state)
+
+    def _update_heartbeat(self):
+        self.state.last_heartbeat = datetime.now(timezone.utc)
+
+    async def scan_candidates(self) -> List[TokenCandidate]:
+        """
+        Simulated scanner for v1.
+
+        This is here to prove the full pipeline is working:
+        - You see logs in Render
+        - `daily_trades` increments
+        - `data/trades_log.jsonl` fills up
+
+        Later, replace this with:
+        - Raydium / Solana DEX feed
+        - Dexscreener / BirdEye / etc.
+        """
+        logger.warning("scan_candidates() CALLED")
+
+        # If we've already hit the trade cap, don't even simulate
+        if self.state.daily_trades >= settings.MAX_TRADES_PER_DAY:
+            logger.debug(
+                "scan_candidates: daily trade cap reached, returning no candidates."
+            )
+            return []
+
+        now = datetime.now(timezone.utc)
+
+        # Simulated meme token that should pass your safety & scoring rules
+        fake = TokenCandidate(
+            token_address="FAKE_TEST_MEME",
+            symbol="TESTMEME",
+            name="Test Meme Token",
+            created_at=now,  # brand new
+            liquidity_usd=settings.MIN_LIQUIDITY_USD * 2,  # safely above min
+            buy_tax_pct=min(
+                settings.MAX_BUY_TAX_PCT - 1.0, settings.MAX_BUY_TAX_PCT
+            ),
+            sell_tax_pct=min(
+                settings.MAX_SELL_TAX_PCT - 1.0, settings.MAX_SELL_TAX_PCT
+            ),
+            mint_authority_revoked=True,
+            freeze_authority_revoked=True,
+            is_honeypot=False,
+            can_sell=True,
+            deployer_address=None,
+            buys_5m=60,
+            sells_5m=10,
+            volume_usd_5m=settings.MIN_LIQUIDITY_USD * 0.5,
+            top_holder_pct=8.0,
+            holder_count=250,
+        )
+
+        logger.info("Scanner produced 1 simulated candidate: {}", fake.symbol)
+        return [fake]
+
+    async def _process_candidate(self, token: TokenCandidate) -> None:
+        logger.info("Evaluating token {}", token.symbol)
+
+        # Safety filter
+        safety = evaluate_safety(token)
+        if not safety.passed:
+            logger.info(
+                "Token {} failed safety: {}",
+                token.symbol,
+                "; ".join(safety.reasons) or "unknown reason",
+            )
+            return
+
+        # Confidence scoring
+        components = compute_confidence_components(token)
+        score = components.total_score
+
+        if score < settings.MIN_SCORE_TO_TRADE:
+            logger.info(
+                "Token {} score too low: {:.1f} < {}",
+                token.symbol,
+                score,
+                settings.MIN_SCORE_TO_TRADE,
+            )
+            return
+
+        # Respect max trades per day
+        if self.state.daily_trades >= settings.MAX_TRADES_PER_DAY:
+            logger.info(
+                "Max trades per day reached ({}), skipping new position.",
+                settings.MAX_TRADES_PER_DAY,
+            )
+            return
+
+        # Exposure limit
+        wallet_balance = get_wallet_balance_sol(self.state.mode)
+        open_exposure = sum(
+            p.size_sol * p.entry_price
+            for p in self.positions.values()
+            if p.status == PositionStatus.OPEN
+        )
+        max_exposure = wallet_balance * (
+            compute_max_open_exposure_pct(self.state) / 100.0
+        )
+
+        if open_exposure >= max_exposure:
+            logger.info(
+                "Exposure limit reached: open_exposure={:.6f}, max_exposure={:.6f}. Skipping.",
+                open_exposure,
+                max_exposure,
+            )
+            return
+
+        # Position sizing
+        size_sol = compute_position_size_sol(self.state, score)
+        await self._open_position(token, size_sol, score)
+
+    async def _open_position(
+        self, token: TokenCandidate, size_sol: float, score: float
+    ):
+        """
+        Simulated BUY; later this will call the real wallet / DEX.
+
+        For now we:
+        - create a Position at a fake price
+        - bump daily_trades
+        - append a TradeLogEntry
+        """
+        fake_price = 1.0  # TODO: replace with real on-chain price
+        pos_id = str(uuid.uuid4())
+        position = Position(
+            id=pos_id,
+            token=token,
+            opened_at=datetime.now(timezone.utc),
+            size_sol=size_sol,
+            entry_price=fake_price,
+        )
+        self.positions[pos_id] = position
+
+        self.state.daily_trades += 1
+        logger.info(
+            "Opened simulated position {} on {} size {:.6f} SOL (score {:.1f})",
+            pos_id,
+            token.symbol,
+            size_sol,
+            score,
+        )
+
+        trade_log = TradeLogEntry(
+            id=str(uuid.uuid4()),
+            position_id=pos_id,
+            token_address=token.token_address,
+            side="BUY",
+            size_sol=size_sol,
+            price=fake_price,
+            timestamp=datetime.now(timezone.utc),
+            note=f"Simulated BUY, score={score:.1f}",
+        )
+        append_trade_logs([trade_log])
+        save_engine_state(self.state)
+
+    async def _update_positions(self):
+        """
+        Placeholder for TP/SL/TSL logic.
+
+        In v1 this does nothing other than keep the structure in place.
+        Later you will:
+        - Fetch current price
+        - Apply stop loss, TPs, trailing stop
+        - Compute realized PnL
+        - Close positions + log SELL trades
+        - Update daily wins/losses, loss_streak
+        """
+        return
 
 
-@app.get("/health")
-async def health():
-    state = load_engine_state()
-    return {
-        "status": state.status,
-        "mode": state.mode,
-        "last_heartbeat": state.last_heartbeat,
-        "last_error": state.last_error,
-        "timestamp": datetime.utcnow().isoformat() + "Z",
-    }
-
-
-@app.get("/")
-async def root():
-    state = load_engine_state()
-    html = f"""
-    <html>
-      <head>
-        <title>MEMESNIPR v1</title>
-        <style>
-          body {{
-            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-            background: #050816;
-            color: #e5e7eb;
-            padding: 2rem;
-          }}
-          .card {{
-            max-width: 720px;
-            margin: 0 auto;
-            background: radial-gradient(circle at top left, #111827, #020617);
-            border-radius: 1.5rem;
-            padding: 2rem;
-            box-shadow: 0 20px 45px rgba(0,0,0,0.6);
-            border: 1px solid rgba(148, 163, 184, 0.35);
-          }}
-          h1 {{
-            font-size: 1.8rem;
-            margin-bottom: 0.5rem;
-          }}
-          .badge {{
-            display: inline-block;
-            padding: 0.15rem 0.55rem;
-            border-radius: 999px;
-            font-size: 0.75rem;
-            letter-spacing: 0.04em;
-            text-transform: uppercase;
-            margin-left: 0.5rem;
-          }}
-          .badge-ok {{
-            background: rgba(52, 211, 153, 0.15);
-            color: #6ee7b7;
-            border: 1px solid rgba(52, 211, 153, 0.3);
-          }}
-          .badge-error {{
-            background: rgba(248, 113, 113, 0.1);
-            color: #fecaca;
-            border: 1px solid rgba(248, 113, 113, 0.3);
-          }}
-          .label {{
-            font-size: 0.75rem;
-            text-transform: uppercase;
-            letter-spacing: 0.08em;
-            color: #9ca3af;
-            margin-bottom: 0.25rem;
-          }}
-          .value {{
-            font-size: 0.95rem;
-            color: #e5e7eb;
-          }}
-          .grid {{
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-            gap: 1rem;
-            margin-top: 1.5rem;
-          }}
-          .pill {{
-            padding: 0.75rem 0.9rem;
-            border-radius: 0.9rem;
-            background: rgba(15, 23, 42, 0.9);
-            border: 1px solid rgba(31, 41, 55, 0.9);
-          }}
-          .muted {{
-            color: #6b7280;
-            font-size: 0.8rem;
-            margin-top: 1.2rem;
-          }}
-          code {{
-            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
-                         "Liberation Mono", "Courier New", monospace;
-            background: rgba(15,23,42,0.95);
-            padding: 0.2rem 0.4rem;
-            border-radius: 0.4rem;
-            font-size: 0.75rem;
-          }}
-        </style>
-      </head>
-      <body>
-        <div class="card">
-          <h1>MEMESNIPR v1
-            <span class="badge {'badge-ok' if state.status != 'ERROR' else 'badge-error'}">
-              {state.status}
-            </span>
-          </h1>
-          <p class="muted">
-            Solana meme sniper &amp; safety-first engine
-            (structure online, logic ready to wire to DEX).
-          </p>
-          <div class="grid">
-            <div class="pill">
-              <div class="label">Mode</div>
-              <div class="value">{state.mode}</div>
-            </div>
-            <div class="pill">
-              <div class="label">Last heartbeat</div>
-              <div class="value">{state.last_heartbeat or '—'}</div>
-            </div>
-            <div class="pill">
-              <div class="label">Daily trades</div>
-              <div class="value">{state.daily_trades}</div>
-            </div>
-            <div class="pill">
-              <div class="label">Realized PnL (SOL)</div>
-              <div class="value">{state.daily_realized_pnl_sol:.6f}</div>
-            </div>
-          </div>
-          <div class="grid" style="margin-top: 1rem;">
-            <div class="pill">
-              <div class="label">Wins / Losses</div>
-              <div class="value">{state.daily_wins} / {state.daily_losses}</div>
-            </div>
-            <div class="pill">
-              <div class="label">Loss streak</div>
-              <div class="value">{state.loss_streak}</div>
-            </div>
-            <div class="pill">
-              <div class="label">Engine error</div>
-              <div class="value">{state.last_error or 'None'}</div>
-            </div>
-          </div>
-          <p class="muted">
-            Engine runs as a background loop. Start simple by leaving
-            <code>scan_candidates()</code> in simulation mode (no live trades),
-            then wire in Solana DEX + wallet calls once you like the behavior.
-          </p>
-        </div>
-      </body>
-    </html>
-    """
-    return HTMLResponse(content=html)
+engine = MemeSniprEngine()
