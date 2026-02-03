@@ -17,28 +17,31 @@ from .models import (
     TradeLogEntry,
 )
 from .safety import evaluate_safety
-from .scoring import compute_confidence_score, compute_confidence_components
+from .scoring import compute_confidence_components
 from .risk import (
     compute_position_size_sol,
     compute_max_open_exposure_pct,
     is_trading_halted,
+    get_wallet_balance_sol,
 )
 from .storage import load_engine_state, save_engine_state, append_trade_logs
 
 
 class MemeSniprEngine:
-    """Core MEMESNIPR engine.
+    """
+    Core MEMESNIPR engine.
 
-    v1 focuses on structure:
+    v1 focuses on structure + simulation:
 
-    - Periodically "scans" for new tokens (currently stubbed)
+    - Background loop every 10s
+    - "Scans" for tokens (currently simulated)
     - Runs safety + scoring
     - Decides whether to (simulated) buy
-    - Manages profit ladder & stop logic (simulated)
-    - Maintains an EngineState heartbeat for the dashboard
+    - Maintains EngineState heartbeat for the dashboard
 
-    You will later wire real Solana DEX + wallet calls
-    into the `scan_candidates` and `execute_buy/sell` methods.
+    Later you will:
+    - Replace `scan_candidates()` with a real Solana DEX feed
+    - Wire `_open_position` / `_update_positions` to real wallet & prices
     """
 
     def __init__(self):
@@ -67,21 +70,38 @@ class MemeSniprEngine:
         self._update_heartbeat()
 
         if is_trading_halted(self.state):
+            if self.state.status != EngineStatus.HALTED:
+                logger.warning(
+                    "Trading halted. daily_losses={}, halted_reason={}",
+                    self.state.daily_losses,
+                    self.state.halted_reason,
+                )
             self.state.status = EngineStatus.HALTED
+            save_engine_state(self.state)
+            return
+
+        # Respect a max trades per day guard as well
+        if self.state.daily_trades >= settings.MAX_TRADES_PER_DAY:
+            if self.state.status != EngineStatus.IDLE:
+                logger.info(
+                    "Max trades per day reached ({}). Engine idling.",
+                    settings.MAX_TRADES_PER_DAY,
+                )
+            self.state.status = EngineStatus.IDLE
             save_engine_state(self.state)
             return
 
         self.state.status = EngineStatus.SCANNING
         save_engine_state(self.state)
 
-        # 1) Scan for new opportunities (stub for now)
+        # 1) Scan for new opportunities
         candidates = await self.scan_candidates()
 
         # 2) Evaluate each candidate
         for token in candidates:
             await self._process_candidate(token)
 
-        # 3) Manage open positions (stubbed logic)
+        # 3) Manage open positions (stub)
         await self._update_positions()
 
         self.state.status = EngineStatus.IDLE
@@ -91,24 +111,63 @@ class MemeSniprEngine:
         self.state.last_heartbeat = datetime.now(timezone.utc)
 
     async def scan_candidates(self) -> List[TokenCandidate]:
-        """Stubbed scanner.
-
-        Replace this with actual integration to Solana DEX / Raydium new pools.
-        For now, it returns an empty list so the engine is safe to run while
-        you deploy & confirm the dashboard.
         """
-        return []
+        Simulated scanner for v1.
+
+        This is here to prove the full pipeline is working:
+        - You see logs in Render
+        - `daily_trades` increments
+        - `data/trades_log.jsonl` fills up
+
+        Later, replace this with:
+        - Raydium / Solana DEX feed
+        - Dexscreener / BirdEye / etc.
+        """
+        # If we've already hit the trade cap, don't even simulate
+        if self.state.daily_trades >= settings.MAX_TRADES_PER_DAY:
+            logger.debug("scan_candidates: daily trade cap reached, returning no candidates.")
+            return []
+
+        now = datetime.now(timezone.utc)
+
+        # Simulated meme token that should pass your safety & scoring rules
+        fake = TokenCandidate(
+            token_address="FAKE_TEST_MEME",
+            symbol="TESTMEME",
+            name="Test Meme Token",
+            created_at=now,  # brand new
+            liquidity_usd=settings.MIN_LIQUIDITY_USD * 2,  # safely above min
+            buy_tax_pct=min(settings.MAX_BUY_TAX_PCT - 1.0, settings.MAX_BUY_TAX_PCT),
+            sell_tax_pct=min(settings.MAX_SELL_TAX_PCT - 1.0, settings.MAX_SELL_TAX_PCT),
+            mint_authority_revoked=True,
+            freeze_authority_revoked=True,
+            is_honeypot=False,
+            can_sell=True,
+            deployer_address=None,
+            buys_5m=60,
+            sells_5m=10,
+            volume_usd_5m=settings.MIN_LIQUIDITY_USD * 0.5,
+            top_holder_pct=8.0,
+            holder_count=250,
+        )
+
+        logger.info("Scanner produced 1 simulated candidate: {}", fake.symbol)
+        return [fake]
 
     async def _process_candidate(self, token: TokenCandidate) -> None:
-        from .risk import get_wallet_balance_sol  # lazy import to avoid cycles
-
         logger.info("Evaluating token {}", token.symbol)
 
+        # Safety filter
         safety = evaluate_safety(token)
         if not safety.passed:
-            logger.info("Token {} failed safety: {}", token.symbol, "; ".join(safety.reasons))
+            logger.info(
+                "Token {} failed safety: {}",
+                token.symbol,
+                "; ".join(safety.reasons) or "unknown reason",
+            )
             return
 
+        # Confidence scoring
         components = compute_confidence_components(token)
         score = components.total_score
 
@@ -121,23 +180,43 @@ class MemeSniprEngine:
             )
             return
 
-        # Check exposure limit
+        # Respect max trades per day
+        if self.state.daily_trades >= settings.MAX_TRADES_PER_DAY:
+            logger.info(
+                "Max trades per day reached ({}), skipping new position.",
+                settings.MAX_TRADES_PER_DAY,
+            )
+            return
+
+        # Exposure limit
         wallet_balance = get_wallet_balance_sol(self.state.mode)
-        open_exposure = sum(p.size_sol * p.entry_price for p in self.positions.values() if p.status == PositionStatus.OPEN)
+        open_exposure = sum(
+            p.size_sol * p.entry_price
+            for p in self.positions.values()
+            if p.status == PositionStatus.OPEN
+        )
         max_exposure = wallet_balance * (compute_max_open_exposure_pct(self.state) / 100.0)
 
         if open_exposure >= max_exposure:
-            logger.info("Exposure limit reached, skipping new position")
+            logger.info(
+                "Exposure limit reached: open_exposure={:.6f}, max_exposure={:.6f}. Skipping.",
+                open_exposure,
+                max_exposure,
+            )
             return
 
-        # Compute position size
+        # Position sizing
         size_sol = compute_position_size_sol(self.state, score)
-        await self._open_position(token, size_sol, components.total_score)
+        await self._open_position(token, size_sol, score)
 
     async def _open_position(self, token: TokenCandidate, size_sol: float, score: float):
-        """Simulated BUY; later this will actually call the wallet / DEX.
+        """
+        Simulated BUY; later this will call the real wallet / DEX.
 
-        For now we just create an in-memory + logged position at a fake price.
+        For now we:
+        - create a Position at a fake price
+        - bump daily_trades
+        - append a TradeLogEntry
         """
         fake_price = 1.0  # TODO: replace with real on-chain price
         pos_id = str(uuid.uuid4())
@@ -151,7 +230,13 @@ class MemeSniprEngine:
         self.positions[pos_id] = position
 
         self.state.daily_trades += 1
-        logger.info("Opened simulated position {} on {} size {:.6f} SOL", pos_id, token.symbol, size_sol)
+        logger.info(
+            "Opened simulated position {} on {} size {:.6f} SOL (score {:.1f})",
+            pos_id,
+            token.symbol,
+            size_sol,
+            score,
+        )
 
         trade_log = TradeLogEntry(
             id=str(uuid.uuid4()),
@@ -167,7 +252,8 @@ class MemeSniprEngine:
         save_engine_state(self.state)
 
     async def _update_positions(self):
-        """Placeholder for TP/SL/TSL logic.
+        """
+        Placeholder for TP/SL/TSL logic.
 
         In v1 this does nothing other than keep the structure in place.
         Later you will:
