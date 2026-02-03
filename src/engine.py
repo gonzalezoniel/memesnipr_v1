@@ -1,3 +1,4 @@
+# src/engine.py
 from __future__ import annotations
 
 import asyncio
@@ -123,9 +124,13 @@ class MemeSniprEngine:
         - Raydium / Solana DEX feed
         - Dexscreener / BirdEye / etc.
         """
+        logger.warning("scan_candidates() CALLED")
+
         # If we've already hit the trade cap, don't even simulate
         if self.state.daily_trades >= settings.MAX_TRADES_PER_DAY:
-            logger.debug("scan_candidates: daily trade cap reached, returning no candidates.")
+            logger.debug(
+                "scan_candidates: daily trade cap reached, returning no candidates."
+            )
             return []
 
         now = datetime.now(timezone.utc)
@@ -137,8 +142,12 @@ class MemeSniprEngine:
             name="Test Meme Token",
             created_at=now,  # brand new
             liquidity_usd=settings.MIN_LIQUIDITY_USD * 2,  # safely above min
-            buy_tax_pct=min(settings.MAX_BUY_TAX_PCT - 1.0, settings.MAX_BUY_TAX_PCT),
-            sell_tax_pct=min(settings.MAX_SELL_TAX_PCT - 1.0, settings.MAX_SELL_TAX_PCT),
+            buy_tax_pct=min(
+                settings.MAX_BUY_TAX_PCT - 1.0, settings.MAX_BUY_TAX_PCT
+            ),
+            sell_tax_pct=min(
+                settings.MAX_SELL_TAX_PCT - 1.0, settings.MAX_SELL_TAX_PCT
+            ),
             mint_authority_revoked=True,
             freeze_authority_revoked=True,
             is_honeypot=False,
@@ -195,7 +204,9 @@ class MemeSniprEngine:
             for p in self.positions.values()
             if p.status == PositionStatus.OPEN
         )
-        max_exposure = wallet_balance * (compute_max_open_exposure_pct(self.state) / 100.0)
+        max_exposure = wallet_balance * (
+            compute_max_open_exposure_pct(self.state) / 100.0
+        )
 
         if open_exposure >= max_exposure:
             logger.info(
@@ -209,7 +220,9 @@ class MemeSniprEngine:
         size_sol = compute_position_size_sol(self.state, score)
         await self._open_position(token, size_sol, score)
 
-    async def _open_position(self, token: TokenCandidate, size_sol: float, score: float):
+    async def _open_position(
+        self, token: TokenCandidate, size_sol: float, score: float
+    ):
         """
         Simulated BUY; later this will call the real wallet / DEX.
 
