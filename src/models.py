@@ -46,6 +46,8 @@ class TokenCandidate(BaseModel):
 class SafetyResult(BaseModel):
     passed: bool
     reasons: list[str] = Field(default_factory=list)
+    reason_codes: list[str] = Field(default_factory=list)
+    risk_score: float = 0.0
 
 
 class ConfidenceComponents(BaseModel):
@@ -106,6 +108,7 @@ class EngineState(BaseModel):
     status: EngineStatus = EngineStatus.IDLE
     mode: Mode = Mode.TEST
     last_heartbeat: Optional[datetime] = None
+    last_scan_at: Optional[datetime] = None
     last_error: Optional[str] = None
 
     daily_trades: int = 0
@@ -115,3 +118,33 @@ class EngineState(BaseModel):
     daily_realized_pnl_usd: float = 0.0
     loss_streak: int = 0
     halted_reason: Optional[str] = None
+
+
+class AuditRecord(BaseModel):
+    timestamp: datetime
+    chain: str
+    token_address: str
+    token_symbol: str
+    reason_codes: list[str] = Field(default_factory=list)
+    scores: dict[str, float] = Field(default_factory=dict)
+    thresholds: dict[str, float] = Field(default_factory=dict)
+    decision: str
+    next_actions: list[str] = Field(default_factory=list)
+
+
+class OrderRequest(BaseModel):
+    token: TokenCandidate
+    side: str
+    size_sol: float
+    score: float
+
+
+class FillResult(BaseModel):
+    filled: bool
+    requested_size_sol: float
+    filled_size_sol: float
+    avg_price: float
+    fee_sol: float = 0.0
+    slippage_bps: float = 0.0
+    reason_code: str = ""
+    venue: str = ""
