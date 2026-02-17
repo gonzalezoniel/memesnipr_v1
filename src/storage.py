@@ -37,8 +37,8 @@ def load_engine_state() -> EngineState:
 
 
 def save_engine_state(state: EngineState) -> None:
-    state_dir = os.path.dirname(settings.ENGINE_STATE_PATH)
-    os.makedirs(state_dir, exist_ok=True)
+    _ensure_parent_dir(settings.ENGINE_STATE_PATH)
+    state_dir = os.path.dirname(settings.ENGINE_STATE_PATH) or "."
 
     fd, temp_path = tempfile.mkstemp(dir=state_dir, prefix="engine_state_", suffix=".tmp")
     try:
@@ -56,7 +56,7 @@ def save_engine_state(state: EngineState) -> None:
 def append_trade_logs(entries: Iterable[TradeLogEntry]) -> None:
     if not entries:
         return
-    os.makedirs(os.path.dirname(settings.TRADES_LOG_PATH), exist_ok=True)
+    _ensure_parent_dir(settings.TRADES_LOG_PATH)
     with open(settings.TRADES_LOG_PATH, "a", encoding="utf-8") as f:
         for entry in entries:
             f.write(json.dumps(entry.model_dump(), default=_json_default) + "\n")
@@ -66,7 +66,7 @@ def append_audit_records(records: Iterable[AuditRecord]) -> None:
     records = list(records)
     if not records:
         return
-    os.makedirs(os.path.dirname(settings.AUDIT_LOG_PATH), exist_ok=True)
+    _ensure_parent_dir(settings.AUDIT_LOG_PATH)
     with open(settings.AUDIT_LOG_PATH, "a", encoding="utf-8") as f:
         for record in records:
             f.write(json.dumps(record.model_dump(), default=_json_default) + "\n")
@@ -116,6 +116,13 @@ def summarize_audit_records(records: list[AuditRecord]) -> dict:
         "last_decision": last_decision,
         "top_rejection_reasons": top_reasons,
     }
+
+
+
+def _ensure_parent_dir(path: str) -> None:
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
 
 
 def _json_default(obj):
