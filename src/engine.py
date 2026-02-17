@@ -2,14 +2,20 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from datetime import datetime, timezone
-from typing import List
 
 from loguru import logger
 
 from .config import settings
+from .config import is_kill_switch_enabled, validate_mode_or_raise
+from .execution import make_executor
+from .features import DefaultFeatureExtractor
+from .ingestion import MockScanner
+from .interfaces import Executor, FeatureExtractor, RiskChecker, Scanner, Scorer
 from .models import (
+    AuditRecord,
     EngineState,
     EngineStatus,
     TokenCandidate,
@@ -17,38 +23,63 @@ from .models import (
     PositionStatus,
     TradeLogEntry,
     Mode,
+    OrderRequest,
 )
+from .persistence import JsonPersistence
+from .risk_checks import ExposureRiskChecker
+from .scorer import ConfidenceScorer
 from .safety import evaluate_safety
-from .scoring import compute_confidence_components
 from .risk import (
     compute_position_size_sol,
-    compute_max_open_exposure_pct,
+    reset_daily_if_needed,
     is_trading_halted,
-    get_wallet_balance_sol,
 )
-from .storage import load_engine_state, save_engine_state, append_trade_logs
 
 
 class MemeSniprEngine:
-    def __init__(self):
-        self.state: EngineState = load_engine_state()
+    def __init__(
+        self,
+        scanner: Scanner | None = None,
+        feature_extractor: FeatureExtractor | None = None,
+        scorer: Scorer | None = None,
+        executor: Executor | None = None,
+        risk_checker: RiskChecker | None = None,
+        persistence: JsonPersistence | None = None,
+    ):
+        self.persistence = persistence or JsonPersistence()
+        self.state: EngineState = self.persistence.load_state()
+        self._loop_task: asyncio.Task | None = None
 
-        # 🔑 RESET DAILY COUNTERS IN TEST MODE
-        if self.state.mode == Mode.TEST:
-            logger.warning("Resetting daily counters (TEST mode)")
-            self.state.daily_trades = 0
-            self.state.daily_wins = 0
-            self.state.daily_losses = 0
-            self.state.loss_streak = 0
-            self.state.halted_reason = None
-            save_engine_state(self.state)
+        # Ensure state mode mirrors settings mode on process boot
+        self.state.mode = Mode.TEST if str(settings.MODE).upper() == Mode.TEST.value else Mode.LIVE
+
+        self.scanner = scanner or MockScanner()
+        self.feature_extractor = feature_extractor or DefaultFeatureExtractor()
+        self.scorer = scorer or ConfidenceScorer()
+        self.executor = executor or make_executor(self.state.mode)
 
         self.positions: dict[str, Position] = {}
+        self.risk_checker = risk_checker or ExposureRiskChecker(self.state)
         self._lock = asyncio.Lock()
 
+
+    def _ensure_mode_ready(self):
+        try:
+            validate_mode_or_raise()
+        except ValueError as exc:
+            self.state.status = EngineStatus.HALTED
+            self.state.halted_reason = str(exc)
+            self.state.last_error = str(exc)
+            self.persistence.save_state(self.state)
+            raise
+
     async def start(self):
+        if self._loop_task and not self._loop_task.done():
+            logger.warning("Engine loop already running")
+            return
+        self._ensure_mode_ready()
         logger.info("Starting MEMESNIPR engine in mode {}", self.state.mode)
-        asyncio.create_task(self._loop())
+        self._loop_task = asyncio.create_task(self._loop())
 
     async def _loop(self):
         while True:
@@ -59,106 +90,229 @@ class MemeSniprEngine:
                 logger.exception("Engine tick failed: {}", e)
                 self.state.status = EngineStatus.ERROR
                 self.state.last_error = str(e)
-                save_engine_state(self.state)
+                self.persistence.save_state(self.state)
 
             await asyncio.sleep(10)
 
     async def _tick(self):
+        self.state = reset_daily_if_needed(self.state)
         self._update_heartbeat()
+
+        if is_kill_switch_enabled():
+            self.state.status = EngineStatus.HALTED
+            self.state.halted_reason = "Kill switch enabled"
+            self.persistence.save_state(self.state)
+            return
 
         if is_trading_halted(self.state):
             self.state.status = EngineStatus.HALTED
-            save_engine_state(self.state)
+            self.persistence.save_state(self.state)
             return
 
         if self.state.daily_trades >= settings.MAX_TRADES_PER_DAY:
             logger.info("Daily trade cap reached, idling")
             self.state.status = EngineStatus.IDLE
-            save_engine_state(self.state)
+            self.persistence.save_state(self.state)
             return
 
         self.state.status = EngineStatus.SCANNING
-        save_engine_state(self.state)
+        self.state.last_scan_at = datetime.now(timezone.utc)
+        self.persistence.save_state(self.state)
 
-        for token in await self.scan_candidates():
+        candidates = await self.scanner.scan_candidates()
+        self._audit_scan_event("SCAN_STARTED", scanned_count=len(candidates))
+
+        for token in candidates:
             await self._process_candidate(token)
 
+        self._audit_scan_event("SCAN_COMPLETED", scanned_count=len(candidates))
+
         self.state.status = EngineStatus.IDLE
-        save_engine_state(self.state)
+        self.persistence.save_state(self.state)
 
     def _update_heartbeat(self):
         self.state.last_heartbeat = datetime.now(timezone.utc)
 
-    async def scan_candidates(self) -> List[TokenCandidate]:
-        logger.warning("scan_candidates() CALLED")
-
-        now = datetime.now(timezone.utc)
-
-        return [
-            TokenCandidate(
-                token_address="FAKE_TEST_MEME",
-                symbol="TESTMEME",
-                name="Test Meme Token",
-                created_at=now,
-                liquidity_usd=settings.MIN_LIQUIDITY_USD * 2,
-                buy_tax_pct=5.0,
-                sell_tax_pct=5.0,
-                mint_authority_revoked=True,
-                freeze_authority_revoked=True,
-                is_honeypot=False,
-                can_sell=True,
-                buys_5m=60,
-                sells_5m=10,
-                volume_usd_5m=50000,
-                top_holder_pct=8.0,
-                holder_count=300,
-            )
-        ]
-
     async def _process_candidate(self, token: TokenCandidate):
-        if not evaluate_safety(token).passed:
+        safety = evaluate_safety(token)
+        features = self.feature_extractor.extract(token)
+        scores = self.scorer.score(token, features)
+        score = scores.get("total", 0.0)
+
+        thresholds = {
+            "min_score_to_trade": float(settings.MIN_SCORE_TO_TRADE),
+            "min_liquidity_usd": float(settings.MIN_LIQUIDITY_USD),
+            "max_buy_tax_pct": float(settings.MAX_BUY_TAX_PCT),
+            "max_sell_tax_pct": float(settings.MAX_SELL_TAX_PCT),
+            "max_risk_score_to_trade": float(settings.MAX_RISK_SCORE_TO_TRADE),
+        }
+        scores = {**scores, "safety_risk": float(safety.risk_score)}
+
+        if safety.risk_score > settings.MAX_RISK_SCORE_TO_TRADE:
+            self._audit(
+                token,
+                reason_codes=["RISK_SCORE_TOO_HIGH"],
+                scores=scores,
+                thresholds=thresholds,
+                decision="REJECT",
+                next_actions=["skip_token", "continue_scanning", "collect_more_token_data"],
+            )
             return
 
-        score = compute_confidence_components(token).total_score
+        if not safety.passed:
+            self._audit(
+                token,
+                reason_codes=["SAFETY_GATE_REJECT"] + safety.reason_codes,
+                scores=scores,
+                thresholds=thresholds,
+                decision="REJECT",
+                next_actions=["skip_token", "continue_scanning", "collect_more_token_data"],
+            )
+            return
+
         if score < settings.MIN_SCORE_TO_TRADE:
+            self._audit(
+                token,
+                reason_codes=["LOW_CONFIDENCE_SCORE"],
+                scores=scores,
+                thresholds=thresholds,
+                decision="REJECT",
+                next_actions=["skip_token", "continue_scanning"],
+            )
             return
 
         size_sol = compute_position_size_sol(self.state, score)
-        await self._open_position(token, size_sol, score)
+        await self._execute_order_pipeline(
+            OrderRequest(token=token, side="BUY", size_sol=size_sol, score=score),
+            thresholds=thresholds,
+            scores=scores,
+        )
 
-    async def _open_position(self, token: TokenCandidate, size_sol: float, score: float):
+    async def _execute_order_pipeline(
+        self,
+        order: OrderRequest,
+        thresholds: dict[str, float],
+        scores: dict[str, float],
+    ):
+        open_positions_size_sol = sum(
+            p.size_sol for p in self.positions.values() if p.status == PositionStatus.OPEN
+        )
+        if not self.risk_checker.can_open(open_positions_size_sol, order.size_sol):
+            logger.warning(
+                "Skipping {}: projected exposure too high ({:.6f} SOL open, +{:.6f} SOL)",
+                order.token.symbol,
+                open_positions_size_sol,
+                order.size_sol,
+            )
+            self._audit(
+                order.token,
+                reason_codes=["MAX_EXPOSURE_EXCEEDED"],
+                scores=scores,
+                thresholds=thresholds,
+                decision="REJECT",
+                next_actions=["reduce_size", "continue_scanning"],
+            )
+            return
+
+        fill = self.executor.execute(order)
+        scores = {
+            **scores,
+            "fill_size_sol": fill.filled_size_sol,
+            "fill_fee_sol": fill.fee_sol,
+            "fill_slippage_bps": fill.slippage_bps,
+        }
+        if not fill.filled:
+            self._audit(
+                order.token,
+                reason_codes=[fill.reason_code],
+                scores=scores,
+                thresholds=thresholds,
+                decision="REJECT",
+                next_actions=["continue_scanning"],
+            )
+            return
+
         pos_id = str(uuid.uuid4())
         self.positions[pos_id] = Position(
             id=pos_id,
-            token=token,
+            token=order.token,
             opened_at=datetime.now(timezone.utc),
-            size_sol=size_sol,
-            entry_price=1.0,
+            size_sol=fill.filled_size_sol,
+            entry_price=fill.avg_price,
         )
 
         self.state.daily_trades += 1
 
         logger.success(
             "SIM BUY {} | {:.6f} SOL | score {:.1f}",
-            token.symbol,
-            size_sol,
-            score,
+            order.token.symbol,
+            fill.filled_size_sol,
+            order.score,
         )
 
-        append_trade_logs([
+        self.persistence.append_trades([
             TradeLogEntry(
                 id=str(uuid.uuid4()),
                 position_id=pos_id,
-                token_address=token.token_address,
+                token_address=order.token.token_address,
                 side="BUY",
-                size_sol=size_sol,
-                price=1.0,
+                size_sol=fill.filled_size_sol,
+                price=fill.avg_price,
                 timestamp=datetime.now(timezone.utc),
-                note=f"SIM BUY score={score:.1f}",
+                note=f"{fill.venue.upper()} BUY score={order.score:.1f} fee={fill.fee_sol:.6f}",
             )
         ])
 
-        save_engine_state(self.state)
+        self.persistence.save_state(self.state)
+        self._audit(
+            order.token,
+            reason_codes=[fill.reason_code],
+            scores=scores,
+            thresholds=thresholds,
+            decision="PAPER_BUY" if self.state.mode == Mode.TEST else "BUY",
+            next_actions=["monitor_position", "apply_tp_sl_logic"],
+        )
+
+    def _audit(
+        self,
+        token: TokenCandidate,
+        reason_codes: list[str],
+        scores: dict[str, float],
+        thresholds: dict[str, float],
+        decision: str,
+        next_actions: list[str],
+    ) -> None:
+        record = AuditRecord(
+            timestamp=datetime.now(timezone.utc),
+            chain=settings.CHAIN,
+            token_address=token.token_address,
+            token_symbol=token.symbol,
+            reason_codes=reason_codes,
+            scores=scores,
+            thresholds=thresholds,
+            decision=decision,
+            next_actions=next_actions,
+        )
+        self.persistence.append_audits([record])
+        self._log_structured("decision_audit", record.model_dump(mode="json"))
+
+    def _audit_scan_event(self, event: str, scanned_count: int) -> None:
+        record = AuditRecord(
+            timestamp=datetime.now(timezone.utc),
+            chain=settings.CHAIN,
+            token_address="SYSTEM_SCAN",
+            token_symbol="SYSTEM",
+            reason_codes=[event],
+            scores={"scanned_count": float(scanned_count)},
+            thresholds={},
+            decision=event,
+            next_actions=["continue_scanning"] if event == "SCAN_STARTED" else ["idle_until_next_tick"],
+        )
+        self.persistence.append_audits([record])
+        self._log_structured("scan_audit", record.model_dump(mode="json"))
+
+    def _log_structured(self, event: str, payload: dict) -> None:
+        logger.info(json.dumps({"event": event, **payload}, default=str))
 
 
 engine = MemeSniprEngine()

@@ -10,7 +10,7 @@ from fastapi.responses import HTMLResponse
 from loguru import logger
 
 from src.engine import engine
-from src.storage import load_engine_state
+from src.storage import load_engine_state, load_recent_audit_records, summarize_audit_records
 
 
 app = FastAPI(title="MEMESNIPR v1", version="0.1.0")
@@ -41,12 +41,33 @@ async def startup_event():
 @app.get("/health")
 async def health():
     state = load_engine_state()
+    ok = state.status != "ERROR"
     return {
+        "ok": ok,
         "status": state.status,
         "mode": state.mode,
         "last_heartbeat": state.last_heartbeat,
+        "last_scan_at": state.last_scan_at,
+        "halted_reason": state.halted_reason,
         "last_error": state.last_error,
         "timestamp": datetime.utcnow().isoformat() + "Z",
+    }
+
+
+@app.get("/status")
+async def status():
+    state = load_engine_state()
+    records = load_recent_audit_records(limit=500)
+    summary = summarize_audit_records(records)
+    return {
+        "mode": state.mode,
+        "engine_status": state.status,
+        "last_scan_at": state.last_scan_at,
+        "last_heartbeat": state.last_heartbeat,
+        "last_decision": summary["last_decision"],
+        "accepted_count": summary["accepted_count"],
+        "rejected_count": summary["rejected_count"],
+        "top_rejection_reasons": summary["top_rejection_reasons"],
     }
 
 
