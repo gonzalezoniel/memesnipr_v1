@@ -1,6 +1,6 @@
 import asyncio
 
-from dashboard.main import status
+from dashboard.main import health, status
 from src.models import AuditRecord
 from src.storage import append_audit_records
 
@@ -42,3 +42,14 @@ def test_status_endpoint_reports_decision_counts(monkeypatch, tmp_path):
     assert payload["rejected_count"] == 1
     assert payload["last_decision"]["decision"] == "PAPER_BUY"
     assert payload["top_rejection_reasons"][0]["code"] == "LOW_CONFIDENCE_SCORE"
+
+
+def test_health_endpoint_returns_plain_mode_and_status(monkeypatch, tmp_path):
+    from src import config
+
+    monkeypatch.setattr(config.settings, "ENGINE_STATE_PATH", str(tmp_path / "engine_state.json"))
+
+    payload = asyncio.run(health())
+
+    assert payload["mode"] == "TEST"
+    assert payload["status"] in {"IDLE", "SCANNING", "TRADING", "HALTED", "ERROR"}

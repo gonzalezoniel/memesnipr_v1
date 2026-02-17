@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 
 from fastapi import FastAPI
@@ -58,7 +58,7 @@ async def health():
         "last_scan_at": state.last_scan_at,
         "halted_reason": state.halted_reason,
         "last_error": state.last_error,
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 
