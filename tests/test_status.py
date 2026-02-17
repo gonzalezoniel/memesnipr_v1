@@ -1,7 +1,7 @@
 import asyncio
 
 from dashboard.main import health, status
-from src.models import AuditRecord
+from src.models import AuditRecord, EngineState, EngineStatus, Mode
 from src.storage import append_audit_records
 
 
@@ -53,3 +53,15 @@ def test_health_endpoint_returns_plain_mode_and_status(monkeypatch, tmp_path):
 
     assert payload["mode"] == "TEST"
     assert payload["status"] in {"IDLE", "SCANNING", "TRADING", "HALTED", "ERROR"}
+
+
+def test_health_endpoint_sets_ok_false_when_engine_error(monkeypatch, tmp_path):
+    from src import storage
+
+    monkeypatch.setattr(storage.settings, "ENGINE_STATE_PATH", str(tmp_path / "engine_state.json"))
+    storage.save_engine_state(EngineState(mode=Mode.TEST, status=EngineStatus.ERROR, last_error="boom"))
+
+    payload = asyncio.run(health())
+
+    assert payload["status"] == "ERROR"
+    assert payload["ok"] is False

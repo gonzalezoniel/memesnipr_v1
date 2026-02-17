@@ -28,6 +28,10 @@ def _fmt_datetime(value: object) -> str:
     return str(value)
 
 
+def _is_error_status(value: object) -> bool:
+    return _to_display(value) == "ERROR"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting MEMESNIPR dashboard + engine")
@@ -54,7 +58,7 @@ async def health():
     state = load_engine_state()
     status = _to_display(state.status)
     return {
-        "ok": status != "ERROR",
+        "ok": not _is_error_status(state.status),
         "status": status,
         "mode": _to_display(state.mode),
         "last_heartbeat": state.last_heartbeat,
