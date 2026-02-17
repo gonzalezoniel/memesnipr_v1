@@ -32,7 +32,10 @@ def _fmt_datetime(value: object) -> str:
 async def lifespan(app: FastAPI):
     logger.info("Starting MEMESNIPR dashboard + engine")
     await engine.start()
-    yield
+    try:
+        yield
+    finally:
+        await engine.stop()
 
 
 app = FastAPI(title="MEMESNIPR v1", version="0.1.0", lifespan=lifespan)

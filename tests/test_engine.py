@@ -145,3 +145,26 @@ def test_live_mode_uses_same_order_pipeline_but_live_send_differs(monkeypatch, t
     ]
     assert records[-1]["decision"] == "REJECT"
     assert "LIVE_SEND_NOT_IMPLEMENTED" in records[-1]["reason_codes"]
+
+
+def test_engine_stop_cancels_background_loop(monkeypatch, tmp_path):
+    from src import config
+
+    monkeypatch.setenv("KILL_SWITCH", "true")
+    monkeypatch.setattr(config.settings, "MODE", "TEST")
+    monkeypatch.setattr(config.settings, "ENGINE_STATE_PATH", str(tmp_path / "engine_state.json"))
+    monkeypatch.setattr(config.settings, "TRADES_LOG_PATH", str(tmp_path / "trades.jsonl"))
+    monkeypatch.setattr(config.settings, "AUDIT_LOG_PATH", str(tmp_path / "audit.jsonl"))
+
+    engine = MemeSniprEngine()
+
+    async def _run():
+        await engine.start()
+        await asyncio.sleep(0)
+        task = engine._loop_task
+        assert task is not None and not task.done()
+        await engine.stop()
+        assert engine._loop_task is None
+        assert task.done()
+
+    asyncio.run(_run())

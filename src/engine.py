@@ -5,6 +5,7 @@ import asyncio
 import json
 import uuid
 from datetime import datetime, timezone
+from contextlib import suppress
 
 from loguru import logger
 
@@ -81,11 +82,26 @@ class MemeSniprEngine:
         logger.info("Starting MEMESNIPR engine in mode {}", self.state.mode)
         self._loop_task = asyncio.create_task(self._loop())
 
+    async def stop(self):
+        if not self._loop_task:
+            return
+        if self._loop_task.done():
+            self._loop_task = None
+            return
+
+        self._loop_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await self._loop_task
+        self._loop_task = None
+
     async def _loop(self):
         while True:
             try:
                 async with self._lock:
                     await self._tick()
+            except asyncio.CancelledError:
+                logger.info("Engine loop cancelled")
+                raise
             except Exception as e:
                 logger.exception("Engine tick failed: {}", e)
                 self.state.status = EngineStatus.ERROR
