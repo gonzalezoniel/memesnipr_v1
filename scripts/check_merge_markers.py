@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 
-MARKERS = ("<<<<<<<", "=======", ">>>>>>>")
+MARKERS = ("<" * 7, "=" * 7, ">" * 7)
 SKIP_DIRS = {".git", ".venv", "venv", "node_modules", "__pycache__"}
 
 

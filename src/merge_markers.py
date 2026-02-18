@@ -3,9 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-START = "<<<<<<<"
-MID = "======="
-END = ">>>>>>>"
+START = "<" * 7
+MID = "=" * 7
+END = ">" * 7
 
 
 @dataclass(frozen=True)
@@ -34,7 +34,7 @@ def parse_conflict_blocks(text: str) -> list[ConflictBlock]:
             i += 1
 
         if i >= len(lines):
-            raise ValueError("Malformed conflict block: missing ======= marker")
+            raise ValueError("Malformed conflict block: missing mid marker")
 
         i += 1
         incoming: list[str] = []
@@ -45,7 +45,7 @@ def parse_conflict_blocks(text: str) -> list[ConflictBlock]:
             i += 1
 
         if i >= len(lines):
-            raise ValueError("Malformed conflict block: missing >>>>>>> marker")
+            raise ValueError("Malformed conflict block: missing end marker")
 
         i += 1
         blocks.append(ConflictBlock(current_lines=current, incoming_lines=incoming))
@@ -77,7 +77,7 @@ def resolve_conflicts(text: str, strategy: str) -> str:
             i += 1
 
         if i >= len(lines):
-            raise ValueError("Malformed conflict block: missing ======= marker")
+            raise ValueError("Malformed conflict block: missing mid marker")
 
         i += 1
         incoming: list[str] = []
@@ -88,7 +88,7 @@ def resolve_conflicts(text: str, strategy: str) -> str:
             i += 1
 
         if i >= len(lines):
-            raise ValueError("Malformed conflict block: missing >>>>>>> marker")
+            raise ValueError("Malformed conflict block: missing end marker")
 
         i += 1
 
