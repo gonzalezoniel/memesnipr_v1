@@ -99,6 +99,15 @@ git commit -m "Resolve merge conflicts with main"
 git push origin <your-branch>
 ```
 
+
+Quick local resolver (use carefully, then review the diff):
+```bash
+python scripts/resolve_merge_markers.py path/to/conflicted_file.py --strategy both --write
+# or choose one side:
+# python scripts/resolve_merge_markers.py path/to/conflicted_file.py --strategy current --write
+# python scripts/resolve_merge_markers.py path/to/conflicted_file.py --strategy incoming --write
+```
+
 Safety checks before pushing conflict resolutions:
 ```bash
 python scripts/check_merge_markers.py
