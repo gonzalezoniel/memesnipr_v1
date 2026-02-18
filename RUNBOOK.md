@@ -102,10 +102,12 @@ git push origin <your-branch>
 
 Quick local resolver (use carefully, then review the diff):
 ```bash
-python scripts/resolve_merge_markers.py path/to/conflicted_file.py --strategy both --write
+python scripts/resolve_merge_markers.py path/to/conflicted_file.py --strategy both
 # or choose one side:
-# python scripts/resolve_merge_markers.py path/to/conflicted_file.py --strategy current --write
-# python scripts/resolve_merge_markers.py path/to/conflicted_file.py --strategy incoming --write
+# python scripts/resolve_merge_markers.py path/to/conflicted_file.py --strategy current
+# python scripts/resolve_merge_markers.py path/to/conflicted_file.py --strategy incoming
+# resolve all conflicted files in the repo at once:
+# python scripts/resolve_merge_markers.py --all --strategy both
 ```
 
 Safety checks before pushing conflict resolutions:
