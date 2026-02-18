@@ -101,10 +101,13 @@ git push origin <your-branch>
 
 Safety checks before pushing conflict resolutions:
 ```bash
-rg "^(<<<<<<<|=======|>>>>>>>)"
+python scripts/check_merge_markers.py
 python -m pytest -q
 python -m compileall -q src dashboard
 ```
 
 If the conflicted file is outside this repo (for example a different project with `app.py`), you must run the same flow in that repository/branch because conflicts are repository-specific.
+
+If GitHub shows markers like `<<<<<<< codex/...` in the web conflict editor, those are unresolved merge markers from Git.
+You must pick the final code, then delete **all three marker lines** (`<<<<<<<`, `=======`, `>>>>>>>`) before committing the resolution.
 

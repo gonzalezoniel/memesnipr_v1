@@ -23,28 +23,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Check for unresolved merge markers
-        run: |
-          python - <<'PYCHK'
-          from pathlib import Path
-
-          markers = ("<<<<<<<", "=======", ">>>>>>>")
-          offenders = []
-          for path in Path('.').rglob('*'):
-              if path.is_dir() or '.git' in path.parts:
-                  continue
-              try:
-                  text = path.read_text(encoding='utf-8')
-              except Exception:
-                  continue
-              for idx, line in enumerate(text.splitlines(), start=1):
-                  if line.startswith(markers):
-                      offenders.append(f"{path}:{idx}:{line}")
-          if offenders:
-              print("Unresolved merge markers found:")
-              for offender in offenders[:50]:
-                  print(offender)
-              raise SystemExit(1)
-          PYCHK
+        run: python scripts/check_merge_markers.py
 
       - name: Run tests
         run: python -m pytest -q
