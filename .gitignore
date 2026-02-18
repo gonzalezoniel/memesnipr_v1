@@ -12,3 +12,8 @@ __pycache__/
 # Runtime state/log artifacts
 /data/
 *.tmp
+
+# Default runtime outputs when paths are filename-only
+engine_state.json
+audit.jsonl
+trades.jsonl
