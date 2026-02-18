@@ -1,0 +1,18 @@
+# Normalize text files to LF for consistent diffs/merges across OSes
+* text=auto eol=lf
+
+# Python/source files are always text
+*.py text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.toml text eol=lf
+*.sh text eol=lf
+
+# Common binary assets
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary

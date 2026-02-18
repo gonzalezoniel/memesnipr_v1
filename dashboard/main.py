@@ -1,8 +1,9 @@
 # dashboard/main.py
 from __future__ import annotations
 
-import asyncio
-from datetime import datetime
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from enum import Enum
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,10 +11,34 @@ from fastapi.responses import HTMLResponse
 from loguru import logger
 
 from src.engine import engine
-from src.storage import load_engine_state
+from src.storage import load_engine_state, load_recent_audit_records, summarize_audit_records
 
 
-app = FastAPI(title="MEMESNIPR v1", version="0.1.0")
+def _to_display(value: object) -> str:
+    if isinstance(value, Enum):
+        return value.value
+    return str(value)
+
+
+def _fmt_datetime(value: object) -> str:
+    if value is None:
+        return "—"
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("Starting MEMESNIPR dashboard + engine")
+    await engine.start()
+    try:
+        yield
+    finally:
+        await engine.stop()
+
+
+app = FastAPI(title="MEMESNIPR v1", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -24,35 +49,49 @@ app.add_middleware(
 )
 
 
-@app.on_event("startup")
-async def startup_event():
-    """
-    Start the MEMESNIPR engine when the FastAPI app starts.
-
-    IMPORTANT:
-    We await engine.start() here so the engine's own background task
-    is registered cleanly on the event loop. We do NOT wrap it in an
-    extra asyncio.create_task(), because engine.start() already does that.
-    """
-    logger.info("Starting MEMESNIPR dashboard + engine")
-    await engine.start()
-
-
 @app.get("/health")
 async def health():
     state = load_engine_state()
+    status = _to_display(state.status)
     return {
-        "status": state.status,
-        "mode": state.mode,
+        "ok": status != "ERROR",
+        "status": status,
+        "mode": _to_display(state.mode),
         "last_heartbeat": state.last_heartbeat,
+        "last_scan_at": state.last_scan_at,
+        "halted_reason": state.halted_reason,
         "last_error": state.last_error,
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.get("/status")
+async def status():
+    state = load_engine_state()
+    records = load_recent_audit_records(limit=500)
+    summary = summarize_audit_records(records)
+    return {
+        "mode": _to_display(state.mode),
+        "engine_status": _to_display(state.status),
+        "last_scan_at": state.last_scan_at,
+        "last_heartbeat": state.last_heartbeat,
+        "last_decision": summary["last_decision"],
+        "accepted_count": summary["accepted_count"],
+        "rejected_count": summary["rejected_count"],
+        "top_rejection_reasons": summary["top_rejection_reasons"],
     }
 
 
 @app.get("/")
 async def root():
     state = load_engine_state()
+    summary = summarize_audit_records(load_recent_audit_records(limit=500))
+
+    status = _to_display(state.status)
+    mode = _to_display(state.mode)
+    top_reasons = summary["top_rejection_reasons"][:3]
+    top_reasons_display = ", ".join(f"{k}:{v}" for k, v in top_reasons) if top_reasons else "None"
+
     html = f"""
     <html>
       <head>
@@ -65,7 +104,7 @@ async def root():
             padding: 2rem;
           }}
           .card {{
-            max-width: 720px;
+            max-width: 860px;
             margin: 0 auto;
             background: radial-gradient(circle at top left, #111827, #020617);
             border-radius: 1.5rem;
@@ -106,12 +145,13 @@ async def root():
           .value {{
             font-size: 0.95rem;
             color: #e5e7eb;
+            word-break: break-word;
           }}
           .grid {{
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
             gap: 1rem;
-            margin-top: 1.5rem;
+            margin-top: 1.2rem;
           }}
           .pill {{
             padding: 0.75rem 0.9rem;
@@ -120,9 +160,9 @@ async def root():
             border: 1px solid rgba(31, 41, 55, 0.9);
           }}
           .muted {{
-            color: #6b7280;
-            font-size: 0.8rem;
-            margin-top: 1.2rem;
+            color: #93a3b8;
+            font-size: 0.9rem;
+            margin-top: 1rem;
           }}
           code {{
             font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
@@ -137,50 +177,34 @@ async def root():
       <body>
         <div class="card">
           <h1>MEMESNIPR v1
-            <span class="badge {'badge-ok' if state.status != 'ERROR' else 'badge-error'}">
-              {state.status}
-            </span>
+            <span class="badge {'badge-ok' if status != 'ERROR' else 'badge-error'}">{status}</span>
           </h1>
-          <p class="muted">
-            Solana meme sniper &amp; safety-first engine
-            (structure online, logic ready to wire to DEX).
-          </p>
+          <p class="muted">Safety-first sniper runtime overview with explicit decision telemetry.</p>
+
           <div class="grid">
-            <div class="pill">
-              <div class="label">Mode</div>
-              <div class="value">{state.mode}</div>
-            </div>
-            <div class="pill">
-              <div class="label">Last heartbeat</div>
-              <div class="value">{state.last_heartbeat or '—'}</div>
-            </div>
-            <div class="pill">
-              <div class="label">Daily trades</div>
-              <div class="value">{state.daily_trades}</div>
-            </div>
-            <div class="pill">
-              <div class="label">Realized PnL (SOL)</div>
-              <div class="value">{state.daily_realized_pnl_sol:.6f}</div>
-            </div>
+            <div class="pill"><div class="label">Mode</div><div class="value">{mode}</div></div>
+            <div class="pill"><div class="label">Last heartbeat</div><div class="value">{_fmt_datetime(state.last_heartbeat)}</div></div>
+            <div class="pill"><div class="label">Last scan</div><div class="value">{_fmt_datetime(state.last_scan_at)}</div></div>
+            <div class="pill"><div class="label">Last decision</div><div class="value">{summary['last_decision'] or 'None'}</div></div>
           </div>
-          <div class="grid" style="margin-top: 1rem;">
-            <div class="pill">
-              <div class="label">Wins / Losses</div>
-              <div class="value">{state.daily_wins} / {state.daily_losses}</div>
-            </div>
-            <div class="pill">
-              <div class="label">Loss streak</div>
-              <div class="value">{state.loss_streak}</div>
-            </div>
-            <div class="pill">
-              <div class="label">Engine error</div>
-              <div class="value">{state.last_error or 'None'}</div>
-            </div>
+
+          <div class="grid">
+            <div class="pill"><div class="label">Daily trades</div><div class="value">{state.daily_trades}</div></div>
+            <div class="pill"><div class="label">Accepted / Rejected</div><div class="value">{summary['accepted_count']} / {summary['rejected_count']}</div></div>
+            <div class="pill"><div class="label">Wins / Losses</div><div class="value">{state.daily_wins} / {state.daily_losses}</div></div>
+            <div class="pill"><div class="label">Loss streak</div><div class="value">{state.loss_streak}</div></div>
           </div>
+
+          <div class="grid">
+            <div class="pill"><div class="label">Realized PnL (SOL)</div><div class="value">{state.daily_realized_pnl_sol:.6f}</div></div>
+            <div class="pill"><div class="label">Halted reason</div><div class="value">{state.halted_reason or 'None'}</div></div>
+            <div class="pill"><div class="label">Engine error</div><div class="value">{state.last_error or 'None'}</div></div>
+            <div class="pill"><div class="label">Top rejection reasons</div><div class="value">{top_reasons_display}</div></div>
+          </div>
+
           <p class="muted">
-            Engine runs as a background loop. Start simple by leaving
-            <code>scan_candidates()</code> in simulation mode (no live trades),
-            then wire in Solana DEX + wallet calls once you like the behavior.
+            Data sources and executors are swappable behind interfaces. Keep <code>MODE=TEST</code>
+            until live execution adapters pass deterministic integration checks.
           </p>
         </div>
       </body>

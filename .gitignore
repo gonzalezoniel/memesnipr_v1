@@ -1,0 +1,14 @@
+# Python bytecode/cache
+__pycache__/
+*.py[cod]
+
+# Test/cache tooling
+.pytest_cache/
+.ruff_cache/
+
+# Local environment files
+.env
+
+# Runtime state/log artifacts
+/data/
+*.tmp
