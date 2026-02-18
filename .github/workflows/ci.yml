@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - work
+
+jobs:
+  test-and-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Check for unresolved merge markers
+        run: |
+          python - <<'PYCHK'
+          from pathlib import Path
+
+          markers = ("<<<<<<<", "=======", ">>>>>>>")
+          offenders = []
+          for path in Path('.').rglob('*'):
+              if path.is_dir() or '.git' in path.parts:
+                  continue
+              try:
+                  text = path.read_text(encoding='utf-8')
+              except Exception:
+                  continue
+              for idx, line in enumerate(text.splitlines(), start=1):
+                  if line.startswith(markers):
+                      offenders.append(f"{path}:{idx}:{line}")
+          if offenders:
+              print("Unresolved merge markers found:")
+              for offender in offenders[:50]:
+                  print(offender)
+              raise SystemExit(1)
+          PYCHK
+
+      - name: Run tests
+        run: python -m pytest -q
+
+      - name: Compile sanity check
+        run: python -m compileall -q src dashboard
+
+      - name: Ruff checks
+        run: ruff check src tests dashboard
