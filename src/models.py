@@ -42,6 +42,8 @@ class TokenCandidate(BaseModel):
     top_holder_pct: float = 0.0
     holder_count: int = 0
 
+    price_usd: float = 0.0
+
 
 class SafetyResult(BaseModel):
     passed: bool

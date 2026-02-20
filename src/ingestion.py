@@ -66,9 +66,12 @@ class MockScanner(Scanner):
         ]
 
 
+_SEEN_TTL_SECONDS = 300
+
+
 class DexScreenerScanner(Scanner):
     def __init__(self) -> None:
-        self._seen: set[str] = set()
+        self._seen: dict[str, float] = {}
 
     async def scan_candidates(self) -> list[TokenCandidate]:
         addresses = await self._fetch_latest_solana_addresses()
@@ -100,6 +103,11 @@ class DexScreenerScanner(Scanner):
         except Exception as exc:
             logger.warning("DexScreener profiles fetch failed: {}", exc)
             return []
+
+        now_ts = datetime.now(timezone.utc).timestamp()
+        expired = [a for a, t in self._seen.items() if now_ts - t > _SEEN_TTL_SECONDS]
+        for a in expired:
+            del self._seen[a]
 
         addresses: list[str] = []
         for p in profiles:
@@ -138,7 +146,7 @@ class DexScreenerScanner(Scanner):
         if not addr:
             return None
 
-        self._seen.add(addr)
+        self._seen[addr] = datetime.now(timezone.utc).timestamp()
 
         txns_5m = pair.get("txns", {}).get("m5", {})
         volume = pair.get("volume", {})
@@ -154,6 +162,14 @@ class DexScreenerScanner(Scanner):
         liquidity_usd = liq.get("usd") or 0.0
         if liquidity_usd < settings.MIN_LIQUIDITY_USD * 0.1:
             return None
+
+        price_str = pair.get("priceUsd")
+        price_usd = 0.0
+        if price_str:
+            try:
+                price_usd = float(price_str)
+            except (ValueError, TypeError):
+                pass
 
         return TokenCandidate(
             token_address=addr,
@@ -172,4 +188,5 @@ class DexScreenerScanner(Scanner):
             volume_usd_5m=volume.get("m5", 0.0),
             top_holder_pct=0.0,
             holder_count=0,
+            price_usd=price_usd,
         )

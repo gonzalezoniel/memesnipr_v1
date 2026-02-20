@@ -234,8 +234,6 @@ class MemeSniprEngine:
             )
             return
 
-        entry_price_usd = order.token.liquidity_usd / max(order.token.volume_usd_5m, 1.0) if order.token.volume_usd_5m > 0 else fill.avg_price
-
         pos_id = str(uuid.uuid4())
         self.positions[pos_id] = Position(
             id=pos_id,
@@ -243,7 +241,7 @@ class MemeSniprEngine:
             opened_at=datetime.now(timezone.utc),
             size_sol=fill.filled_size_sol,
             entry_price=fill.avg_price,
-            entry_price_usd=entry_price_usd,
+            entry_price_usd=order.token.price_usd,
         )
 
         self.state.daily_trades += 1
