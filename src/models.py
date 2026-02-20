@@ -81,9 +81,13 @@ class Position(BaseModel):
     opened_at: datetime
     size_sol: float
     entry_price: float
+    entry_price_usd: float = 0.0
     status: PositionStatus = PositionStatus.OPEN
     realized_pnl_sol: float = 0.0
     realized_pnl_usd: float = 0.0
+    exit_price_usd: float = 0.0
+    exit_reason: Optional[str] = None
+    closed_at: Optional[datetime] = None
 
     tp1_hit: bool = False
     tp2_hit: bool = False

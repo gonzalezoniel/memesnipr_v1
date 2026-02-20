@@ -15,6 +15,32 @@ _HTTP_TIMEOUT = 12.0
 _MAX_TOKENS_PER_BATCH = 30
 
 
+async def fetch_current_prices(token_addresses: list[str]) -> dict[str, float]:
+    if not token_addresses:
+        return {}
+    joined = ",".join(token_addresses[:_MAX_TOKENS_PER_BATCH])
+    url = _DEXSCREENER_TOKEN_URL.format(addresses=joined)
+    try:
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as exc:
+        logger.warning("DexScreener price fetch failed: {}", exc)
+        return {}
+
+    prices: dict[str, float] = {}
+    for pair in data.get("pairs") or []:
+        addr = pair.get("baseToken", {}).get("address", "")
+        price_str = pair.get("priceUsd")
+        if addr and price_str and addr not in prices:
+            try:
+                prices[addr] = float(price_str)
+            except (ValueError, TypeError):
+                pass
+    return prices
+
+
 class MockScanner(Scanner):
     async def scan_candidates(self) -> list[TokenCandidate]:
         now = datetime.now(timezone.utc)

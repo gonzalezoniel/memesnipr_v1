@@ -12,7 +12,7 @@ from .config import settings
 from .config import is_kill_switch_enabled, validate_mode_or_raise
 from .execution import make_executor
 from .features import DefaultFeatureExtractor
-from .ingestion import DexScreenerScanner, MockScanner
+from .ingestion import DexScreenerScanner, MockScanner, fetch_current_prices
 from .interfaces import Executor, FeatureExtractor, RiskChecker, Scanner, Scorer
 from .models import (
     AuditRecord,
@@ -108,6 +108,8 @@ class MemeSniprEngine:
             self.state.status = EngineStatus.HALTED
             self.persistence.save_state(self.state)
             return
+
+        await self._monitor_positions()
 
         if self.state.daily_trades >= settings.MAX_TRADES_PER_DAY:
             logger.info("Daily trade cap reached, idling")
@@ -232,6 +234,8 @@ class MemeSniprEngine:
             )
             return
 
+        entry_price_usd = order.token.liquidity_usd / max(order.token.volume_usd_5m, 1.0) if order.token.volume_usd_5m > 0 else fill.avg_price
+
         pos_id = str(uuid.uuid4())
         self.positions[pos_id] = Position(
             id=pos_id,
@@ -239,6 +243,7 @@ class MemeSniprEngine:
             opened_at=datetime.now(timezone.utc),
             size_sol=fill.filled_size_sol,
             entry_price=fill.avg_price,
+            entry_price_usd=entry_price_usd,
         )
 
         self.state.daily_trades += 1
@@ -295,6 +300,81 @@ class MemeSniprEngine:
         )
         self.persistence.append_audits([record])
         self._log_structured("decision_audit", record.model_dump(mode="json"))
+
+    async def _monitor_positions(self) -> None:
+        open_positions = [
+            (pid, pos) for pid, pos in self.positions.items()
+            if pos.status == PositionStatus.OPEN
+        ]
+        if not open_positions:
+            return
+
+        token_addrs = list({pos.token.token_address for _, pos in open_positions})
+        prices = await fetch_current_prices(token_addrs)
+        if not prices:
+            return
+
+        now = datetime.now(timezone.utc)
+        for pid, pos in open_positions:
+            current_price = prices.get(pos.token.token_address)
+            if current_price is None or pos.entry_price_usd <= 0:
+                continue
+
+            pct_change = ((current_price - pos.entry_price_usd) / pos.entry_price_usd) * 100.0
+
+            exit_reason = None
+            if pct_change <= -settings.STOP_LOSS_PCT:
+                exit_reason = "STOP_LOSS"
+            elif pct_change >= settings.TP3_PCT:
+                exit_reason = "TP3_HIT"
+                pos.tp3_hit = True
+            elif pct_change >= settings.TP2_PCT:
+                exit_reason = "TP2_HIT"
+                pos.tp2_hit = True
+            elif pct_change >= settings.TP1_PCT:
+                exit_reason = "TP1_HIT"
+                pos.tp1_hit = True
+
+            if exit_reason is None:
+                age_minutes = (now - pos.opened_at).total_seconds() / 60.0
+                if age_minutes > settings.MAX_TOKEN_AGE_MINUTES:
+                    exit_reason = "MAX_AGE_EXIT"
+
+            if exit_reason is not None:
+                pnl_sol = pos.size_sol * (pct_change / 100.0)
+                pos.status = PositionStatus.CLOSED
+                pos.realized_pnl_sol = pnl_sol
+                pos.realized_pnl_usd = pnl_sol * current_price
+                pos.exit_price_usd = current_price
+                pos.exit_reason = exit_reason
+                pos.closed_at = now
+
+                if pnl_sol >= 0:
+                    self.state.daily_wins += 1
+                    self.state.loss_streak = 0
+                else:
+                    self.state.daily_losses += 1
+                    self.state.loss_streak += 1
+                self.state.daily_realized_pnl_sol += pnl_sol
+
+                self.persistence.append_trades([TradeLogEntry(
+                    id=str(uuid.uuid4()),
+                    position_id=pid,
+                    token_address=pos.token.token_address,
+                    side="SELL",
+                    size_sol=pos.size_sol,
+                    price=current_price,
+                    timestamp=now,
+                    realized_pnl_sol=pnl_sol,
+                    note=f"{exit_reason} pct={pct_change:+.1f}% pnl={pnl_sol:+.6f} SOL",
+                )])
+
+                logger.success(
+                    "SIM SELL {} | {} | pct={:+.1f}% | pnl={:+.6f} SOL",
+                    pos.token.symbol, exit_reason, pct_change, pnl_sol,
+                )
+
+        self.persistence.save_state(self.state)
 
     def _audit_scan_event(self, event: str, scanned_count: int) -> None:
         record = AuditRecord(
