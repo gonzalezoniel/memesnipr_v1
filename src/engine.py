@@ -12,7 +12,7 @@ from .config import settings
 from .config import is_kill_switch_enabled, validate_mode_or_raise
 from .execution import make_executor
 from .features import DefaultFeatureExtractor
-from .ingestion import MockScanner
+from .ingestion import DexScreenerScanner, MockScanner
 from .interfaces import Executor, FeatureExtractor, RiskChecker, Scanner, Scorer
 from .models import (
     AuditRecord,
@@ -53,7 +53,7 @@ class MemeSniprEngine:
         # Ensure state mode mirrors settings mode on process boot
         self.state.mode = Mode.TEST if str(settings.MODE).upper() == Mode.TEST.value else Mode.LIVE
 
-        self.scanner = scanner or MockScanner()
+        self.scanner = scanner or DexScreenerScanner()
         self.feature_extractor = feature_extractor or DefaultFeatureExtractor()
         self.scorer = scorer or ConfidenceScorer()
         self.executor = executor or make_executor(self.state.mode)
