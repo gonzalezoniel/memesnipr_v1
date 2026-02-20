@@ -1,19 +1,53 @@
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
+
+import httpx
+from loguru import logger
 
 from .config import settings
 from .models import EngineState, Mode
 
+_balance_cache: dict[str, tuple[float, float]] = {}
+_CACHE_TTL = 30.0
+
 
 def get_wallet_balance_sol(mode: Mode) -> float:
-    """Placeholder: wire this to a real Solana wallet balance call.
+    if mode == Mode.TEST:
+        pubkey = settings.TEST_WALLET_PUBLIC_KEY
+    else:
+        pubkey = settings.LIVE_WALLET_PUBLIC_KEY
 
-    For TEST mode you can keep this as a fixed value you set manually.
-    For LIVE mode you should query the Phantom wallet via RPC.
-    """
-    # TODO: integrate actual wallet balance fetch
-    return 1.0  # treat as 1 SOL in TEST until wired
+    if not pubkey or not pubkey.strip():
+        return 1.0
+
+    now = time.monotonic()
+    cached = _balance_cache.get(pubkey)
+    if cached and (now - cached[1]) < _CACHE_TTL:
+        return cached[0]
+
+    try:
+        resp = httpx.post(
+            str(settings.SOL_RPC_URL),
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "getBalance",
+                "params": [pubkey],
+            },
+            timeout=8.0,
+        )
+        resp.raise_for_status()
+        lamports = resp.json().get("result", {}).get("value", 0)
+        balance = lamports / 1_000_000_000
+        if balance <= 0:
+            return 1.0
+        _balance_cache[pubkey] = (balance, now)
+        return balance
+    except Exception as exc:
+        logger.warning("Wallet balance fetch failed, using fallback: {}", exc)
+        return 1.0
 
 
 def compute_risk_per_trade_pct(state: EngineState) -> float:

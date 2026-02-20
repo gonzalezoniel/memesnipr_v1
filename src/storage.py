@@ -72,6 +72,27 @@ def append_audit_records(records: Iterable[AuditRecord]) -> None:
             f.write(json.dumps(record.model_dump(), default=_json_default) + "\n")
 
 
+def load_recent_trades(limit: int = 100) -> list[TradeLogEntry]:
+    path = settings.TRADES_LOG_PATH
+    if not os.path.exists(path):
+        return []
+
+    with open(path, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+
+    rows = lines[-limit:]
+    entries: list[TradeLogEntry] = []
+    for row in rows:
+        row = row.strip()
+        if not row:
+            continue
+        try:
+            entries.append(TradeLogEntry.model_validate(json.loads(row)))
+        except Exception as exc:
+            logger.warning("Skipping invalid trade row: {}", exc)
+    return entries
+
+
 def load_recent_audit_records(limit: int = 200) -> list[AuditRecord]:
     path = settings.AUDIT_LOG_PATH
     if not os.path.exists(path):
