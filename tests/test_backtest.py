@@ -22,6 +22,7 @@ def _clean_token(symbol: str = "GOOD", price_usd: float = 0.001) -> TokenCandida
         freeze_authority_revoked=True,
         is_honeypot=False,
         can_sell=True,
+        safety_data_verified=True,
         buys_5m=100,
         sells_5m=15,
         volume_usd_5m=80_000,
@@ -157,3 +158,58 @@ def test_empty_scenarios_produce_empty_report():
     assert report.scenarios_total == 0
     assert report.trades_taken == 0
     assert report.trades_rejected == 0
+
+
+def test_trailing_stop_triggers():
+    runner = BacktestRunner()
+    scenarios = [
+        BacktestScenario(
+            label="trailing",
+            token=_clean_token(price_usd=0.001),
+            price_ticks=[
+                PriceTick(offset_seconds=30, price_usd=0.00110),
+                PriceTick(offset_seconds=60, price_usd=0.00130),
+                PriceTick(offset_seconds=90, price_usd=0.00150),
+                PriceTick(offset_seconds=120, price_usd=0.00125),
+                PriceTick(offset_seconds=180, price_usd=0.00110),
+            ],
+        ),
+    ]
+    report = runner.run(scenarios)
+    assert report.trades_taken == 1
+    result = report.results[0]
+    assert result.exit_reason in ("TRAILING_STOP", "TP1_PARTIAL")
+    assert result.pnl_sol > 0
+
+
+def test_unverified_token_rejected():
+    token = TokenCandidate(
+        token_address="BT_UNVERIFIED",
+        symbol="UNVER",
+        name="Unverified Token",
+        created_at=datetime.now(timezone.utc),
+        liquidity_usd=800_000,
+        buy_tax_pct=1.0,
+        sell_tax_pct=1.0,
+        mint_authority_revoked=False,
+        freeze_authority_revoked=False,
+        is_honeypot=False,
+        can_sell=True,
+        safety_data_verified=False,
+        buys_5m=100,
+        sells_5m=15,
+        volume_usd_5m=80_000,
+        top_holder_pct=4.0,
+        holder_count=500,
+        price_usd=0.001,
+    )
+    runner = BacktestRunner()
+    scenarios = [BacktestScenario(label="unverified", token=token, price_ticks=[])]
+    report = runner.run(scenarios)
+    assert report.trades_rejected == 1
+    reasons = report.results[0].rejection_reasons
+    assert any(r in reasons for r in (
+        "UNVERIFIED_MINT_AUTHORITY",
+        "SAFETY_GATE_REJECT",
+        "RISK_SCORE_TOO_HIGH",
+    ))

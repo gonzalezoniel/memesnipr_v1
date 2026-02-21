@@ -22,6 +22,7 @@ def _mk_token() -> TokenCandidate:
         freeze_authority_revoked=True,
         is_honeypot=False,
         can_sell=True,
+        safety_data_verified=True,
         buys_5m=100,
         sells_5m=20,
         volume_usd_5m=100_000,

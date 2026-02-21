@@ -16,5 +16,6 @@ class ConfidenceScorer(Scorer):
             "holder": components.holder_score,
             "slippage": components.slippage_score,
             "meta": components.meta_score,
+            "volume_momentum": components.volume_momentum_score,
             **features,
         }

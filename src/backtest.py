@@ -285,29 +285,44 @@ class BacktestRunner:
             return None, "NO_PRICE_DATA", 0.0
 
         max_age_seconds = settings.MAX_TOKEN_AGE_MINUTES * 60.0
+        peak_price = entry_price_usd
+        tp1_hit = False
+        tp2_hit = False
 
         for tick in price_ticks:
             if entry_price_usd <= 0:
                 continue
+
+            if tick.price_usd > peak_price:
+                peak_price = tick.price_usd
 
             pct = ((tick.price_usd - entry_price_usd) / entry_price_usd) * 100.0
 
             if pct <= -settings.STOP_LOSS_PCT:
                 return tick.price_usd, "STOP_LOSS", tick.offset_seconds
 
+            if peak_price > entry_price_usd:
+                drop_from_peak = ((peak_price - tick.price_usd) / peak_price) * 100.0
+                if drop_from_peak >= settings.TRAILING_STOP_PCT and pct > 0:
+                    return tick.price_usd, "TRAILING_STOP", tick.offset_seconds
+
             if pct >= settings.TP3_PCT:
                 return tick.price_usd, "TP3_HIT", tick.offset_seconds
 
-            if pct >= settings.TP2_PCT:
-                return tick.price_usd, "TP2_HIT", tick.offset_seconds
+            if not tp2_hit and pct >= settings.TP2_PCT:
+                tp2_hit = True
 
-            if pct >= settings.TP1_PCT:
-                return tick.price_usd, "TP1_HIT", tick.offset_seconds
+            if not tp1_hit and pct >= settings.TP1_PCT:
+                tp1_hit = True
 
             if tick.offset_seconds >= max_age_seconds:
                 return tick.price_usd, "MAX_AGE_EXIT", tick.offset_seconds
 
         last = price_ticks[-1]
+        if tp2_hit:
+            return last.price_usd, "TP2_PARTIAL", last.offset_seconds
+        if tp1_hit:
+            return last.price_usd, "TP1_PARTIAL", last.offset_seconds
         return last.price_usd, "END_OF_DATA", last.offset_seconds
 
     def _build_report(
@@ -392,6 +407,7 @@ def generate_synthetic_scenarios(count: int = 20) -> list[BacktestScenario]:
             freeze_authority_revoked=True,
             is_honeypot=False,
             can_sell=True,
+            safety_data_verified=True,
             buys_5m=120,
             sells_5m=15,
             volume_usd_5m=90_000,
@@ -424,6 +440,7 @@ def generate_synthetic_scenarios(count: int = 20) -> list[BacktestScenario]:
             freeze_authority_revoked=True,
             is_honeypot=False,
             can_sell=True,
+            safety_data_verified=True,
             buys_5m=80,
             sells_5m=20,
             volume_usd_5m=60_000,
@@ -478,6 +495,7 @@ def generate_synthetic_scenarios(count: int = 20) -> list[BacktestScenario]:
             freeze_authority_revoked=True,
             is_honeypot=False,
             can_sell=True,
+            safety_data_verified=True,
             buys_5m=50,
             sells_5m=10,
             volume_usd_5m=2_000,
@@ -502,6 +520,7 @@ def generate_synthetic_scenarios(count: int = 20) -> list[BacktestScenario]:
             freeze_authority_revoked=True,
             is_honeypot=False,
             can_sell=True,
+            safety_data_verified=True,
             buys_5m=100,
             sells_5m=20,
             volume_usd_5m=80_000,
@@ -526,6 +545,7 @@ def generate_synthetic_scenarios(count: int = 20) -> list[BacktestScenario]:
             freeze_authority_revoked=True,
             is_honeypot=False,
             can_sell=True,
+            safety_data_verified=True,
             buys_5m=70,
             sells_5m=25,
             volume_usd_5m=55_000,
@@ -558,6 +578,7 @@ def generate_synthetic_scenarios(count: int = 20) -> list[BacktestScenario]:
             freeze_authority_revoked=True,
             is_honeypot=False,
             can_sell=True,
+            safety_data_verified=True,
             buys_5m=90,
             sells_5m=15,
             volume_usd_5m=70_000,
@@ -588,6 +609,7 @@ def generate_synthetic_scenarios(count: int = 20) -> list[BacktestScenario]:
             freeze_authority_revoked=True,
             is_honeypot=False,
             can_sell=True,
+            safety_data_verified=True,
             buys_5m=110,
             sells_5m=12,
             volume_usd_5m=95_000,
@@ -618,6 +640,7 @@ def generate_synthetic_scenarios(count: int = 20) -> list[BacktestScenario]:
             freeze_authority_revoked=True,
             is_honeypot=False,
             can_sell=True,
+            safety_data_verified=True,
             buys_5m=50,
             sells_5m=5,
             volume_usd_5m=40_000,
@@ -642,6 +665,7 @@ def generate_synthetic_scenarios(count: int = 20) -> list[BacktestScenario]:
             freeze_authority_revoked=True,
             is_honeypot=False,
             can_sell=True,
+            safety_data_verified=True,
             buys_5m=95,
             sells_5m=18,
             volume_usd_5m=75_000,
@@ -673,6 +697,7 @@ def generate_synthetic_scenarios(count: int = 20) -> list[BacktestScenario]:
             freeze_authority_revoked=True,
             is_honeypot=False,
             can_sell=True,
+            safety_data_verified=True,
             buys_5m=60,
             sells_5m=10,
             volume_usd_5m=50_000,
@@ -697,6 +722,7 @@ def generate_synthetic_scenarios(count: int = 20) -> list[BacktestScenario]:
             freeze_authority_revoked=True,
             is_honeypot=False,
             can_sell=True,
+            safety_data_verified=True,
             buys_5m=75,
             sells_5m=20,
             volume_usd_5m=60_000,
@@ -727,6 +753,7 @@ def generate_synthetic_scenarios(count: int = 20) -> list[BacktestScenario]:
             freeze_authority_revoked=True,
             is_honeypot=False,
             can_sell=True,
+            safety_data_verified=True,
             buys_5m=200,
             sells_5m=10,
             volume_usd_5m=150_000,
@@ -757,6 +784,7 @@ def generate_synthetic_scenarios(count: int = 20) -> list[BacktestScenario]:
             freeze_authority_revoked=False,
             is_honeypot=False,
             can_sell=True,
+            safety_data_verified=True,
             buys_5m=80,
             sells_5m=15,
             volume_usd_5m=65_000,
@@ -781,6 +809,7 @@ def generate_synthetic_scenarios(count: int = 20) -> list[BacktestScenario]:
             freeze_authority_revoked=True,
             is_honeypot=False,
             can_sell=True,
+            safety_data_verified=True,
             buys_5m=10,
             sells_5m=30,
             volume_usd_5m=3_000,
@@ -805,6 +834,7 @@ def generate_synthetic_scenarios(count: int = 20) -> list[BacktestScenario]:
             freeze_authority_revoked=True,
             is_honeypot=False,
             can_sell=True,
+            safety_data_verified=True,
             buys_5m=85,
             sells_5m=15,
             volume_usd_5m=65_000,
@@ -833,6 +863,7 @@ def generate_synthetic_scenarios(count: int = 20) -> list[BacktestScenario]:
             freeze_authority_revoked=True,
             is_honeypot=False,
             can_sell=True,
+            safety_data_verified=True,
             buys_5m=100,
             sells_5m=18,
             volume_usd_5m=80_000,
@@ -863,6 +894,7 @@ def generate_synthetic_scenarios(count: int = 20) -> list[BacktestScenario]:
             freeze_authority_revoked=True,
             is_honeypot=False,
             can_sell=True,
+            safety_data_verified=True,
             buys_5m=90,
             sells_5m=20,
             volume_usd_5m=70_000,
@@ -894,6 +926,7 @@ def generate_synthetic_scenarios(count: int = 20) -> list[BacktestScenario]:
             freeze_authority_revoked=True,
             is_honeypot=False,
             can_sell=True,
+            safety_data_verified=True,
             buys_5m=80,
             sells_5m=15,
             volume_usd_5m=60_000,
@@ -905,6 +938,38 @@ def generate_synthetic_scenarios(count: int = 20) -> list[BacktestScenario]:
             PriceTick(offset_seconds=60, price_usd=0.00305),
             PriceTick(offset_seconds=120, price_usd=0.00310),
             PriceTick(offset_seconds=300, price_usd=0.00315),
+        ],
+    ))
+
+    scenarios.append(BacktestScenario(
+        label="pump_then_trailing_stop",
+        token=TokenCandidate(
+            token_address="SYN_TRAIL_001",
+            symbol="TRAIL",
+            name="Trailing Stop Token",
+            created_at=now,
+            liquidity_usd=750_000,
+            buy_tax_pct=1.0,
+            sell_tax_pct=1.0,
+            mint_authority_revoked=True,
+            freeze_authority_revoked=True,
+            is_honeypot=False,
+            can_sell=True,
+            safety_data_verified=True,
+            buys_5m=100,
+            sells_5m=15,
+            volume_usd_5m=80_000,
+            top_holder_pct=4.0,
+            holder_count=400,
+            price_usd=0.001,
+        ),
+        price_ticks=[
+            PriceTick(offset_seconds=30, price_usd=0.00110),
+            PriceTick(offset_seconds=60, price_usd=0.00125),
+            PriceTick(offset_seconds=90, price_usd=0.00140),
+            PriceTick(offset_seconds=120, price_usd=0.00150),
+            PriceTick(offset_seconds=180, price_usd=0.00130),
+            PriceTick(offset_seconds=240, price_usd=0.00115),
         ],
     ))
 
@@ -922,6 +987,7 @@ def generate_synthetic_scenarios(count: int = 20) -> list[BacktestScenario]:
             freeze_authority_revoked=True,
             is_honeypot=False,
             can_sell=True,
+            safety_data_verified=True,
             buys_5m=100,
             sells_5m=20,
             volume_usd_5m=80_000,

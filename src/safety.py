@@ -37,6 +37,18 @@ def evaluate_safety(token: TokenCandidate) -> SafetyResult:
         if _is_unknown_number(token.volume_usd_5m):
             _add_reason("UNKNOWN_VOLUME", "Recent volume is unknown")
 
+    if not token.safety_data_verified:
+        if not token.mint_authority_revoked:
+            _add_reason(
+                "UNVERIFIED_MINT_AUTHORITY",
+                "Mint authority status not verified on-chain — assuming active",
+            )
+        if not token.freeze_authority_revoked:
+            _add_reason(
+                "UNVERIFIED_FREEZE_AUTHORITY",
+                "Freeze authority status not verified on-chain — assuming active",
+            )
+
     age_seconds = (datetime.now(timezone.utc) - token.created_at).total_seconds()
     age_minutes = age_seconds / 60.0
 
