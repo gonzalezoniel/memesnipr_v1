@@ -33,12 +33,12 @@ class TokenCandidate(BaseModel):
     can_sell: bool = True
     deployer_address: Optional[str] = None
 
-    # Flow / trading behavior
+    safety_data_verified: bool = False
+
     buys_5m: int = 0
     sells_5m: int = 0
     volume_usd_5m: float = 0.0
 
-    # Holder distribution
     top_holder_pct: float = 0.0
     holder_count: int = 0
 
@@ -59,6 +59,7 @@ class ConfidenceComponents(BaseModel):
     holder_score: float = 0.0
     slippage_score: float = 0.0
     meta_score: float = 0.0
+    volume_momentum_score: float = 0.0
 
     @property
     def total_score(self) -> float:
@@ -69,6 +70,7 @@ class ConfidenceComponents(BaseModel):
             + self.holder_score
             + self.slippage_score
             + self.meta_score
+            + self.volume_momentum_score
         )
 
 
@@ -90,6 +92,9 @@ class Position(BaseModel):
     exit_price_usd: float = 0.0
     exit_reason: Optional[str] = None
     closed_at: Optional[datetime] = None
+
+    peak_price_usd: float = 0.0
+    remaining_size_pct: float = 100.0
 
     tp1_hit: bool = False
     tp2_hit: bool = False

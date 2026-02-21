@@ -40,6 +40,7 @@ class TwoTokenScanner(Scanner):
             freeze_authority_revoked=True,
             is_honeypot=False,
             can_sell=True,
+            safety_data_verified=True,
             buys_5m=100,
             sells_5m=10,
             volume_usd_5m=80_000,

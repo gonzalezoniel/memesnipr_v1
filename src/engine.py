@@ -318,41 +318,41 @@ class MemeSniprEngine:
             if current_price is None or pos.entry_price_usd <= 0:
                 continue
 
+            if current_price > pos.peak_price_usd:
+                pos.peak_price_usd = current_price
+
             pct_change = ((current_price - pos.entry_price_usd) / pos.entry_price_usd) * 100.0
 
-            exit_reason = None
             if pct_change <= -settings.STOP_LOSS_PCT:
-                exit_reason = "STOP_LOSS"
-            elif pct_change >= settings.TP3_PCT:
-                exit_reason = "TP3_HIT"
+                self._close_position(pid, pos, current_price, pct_change, "STOP_LOSS", now)
+                continue
+
+            if pos.peak_price_usd > pos.entry_price_usd:
+                drop_from_peak = ((pos.peak_price_usd - current_price) / pos.peak_price_usd) * 100.0
+                if drop_from_peak >= settings.TRAILING_STOP_PCT and pct_change > 0:
+                    self._close_position(pid, pos, current_price, pct_change, "TRAILING_STOP", now)
+                    continue
+
+            partial_sell_pct = 0.0
+            exit_label = ""
+
+            if not pos.tp3_hit and pct_change >= settings.TP3_PCT:
                 pos.tp3_hit = True
-            elif pct_change >= settings.TP2_PCT:
-                exit_reason = "TP2_HIT"
+                partial_sell_pct = pos.remaining_size_pct
+                exit_label = "TP3_HIT"
+            elif not pos.tp2_hit and pct_change >= settings.TP2_PCT:
                 pos.tp2_hit = True
-            elif pct_change >= settings.TP1_PCT:
-                exit_reason = "TP1_HIT"
+                partial_sell_pct = min(33.0, pos.remaining_size_pct)
+                exit_label = "TP2_PARTIAL"
+            elif not pos.tp1_hit and pct_change >= settings.TP1_PCT:
                 pos.tp1_hit = True
+                partial_sell_pct = min(33.0, pos.remaining_size_pct)
+                exit_label = "TP1_PARTIAL"
 
-            if exit_reason is None:
-                age_minutes = (now - pos.opened_at).total_seconds() / 60.0
-                if age_minutes > settings.MAX_TOKEN_AGE_MINUTES:
-                    exit_reason = "MAX_AGE_EXIT"
-
-            if exit_reason is not None:
-                pnl_sol = pos.size_sol * (pct_change / 100.0)
-                pos.status = PositionStatus.CLOSED
-                pos.realized_pnl_sol = pnl_sol
-                pos.realized_pnl_usd = pnl_sol * current_price
-                pos.exit_price_usd = current_price
-                pos.exit_reason = exit_reason
-                pos.closed_at = now
-
-                if pnl_sol >= 0:
-                    self.state.daily_wins += 1
-                    self.state.loss_streak = 0
-                else:
-                    self.state.daily_losses += 1
-                    self.state.loss_streak += 1
+            if partial_sell_pct > 0:
+                sell_size = pos.size_sol * (partial_sell_pct / 100.0)
+                pnl_sol = sell_size * (pct_change / 100.0)
+                pos.remaining_size_pct -= partial_sell_pct
                 self.state.daily_realized_pnl_sol += pnl_sol
 
                 self.persistence.append_trades([TradeLogEntry(
@@ -360,19 +360,80 @@ class MemeSniprEngine:
                     position_id=pid,
                     token_address=pos.token.token_address,
                     side="SELL",
-                    size_sol=pos.size_sol,
+                    size_sol=sell_size,
                     price=current_price,
                     timestamp=now,
                     realized_pnl_sol=pnl_sol,
-                    note=f"{exit_reason} pct={pct_change:+.1f}% pnl={pnl_sol:+.6f} SOL",
+                    note=f"{exit_label} sell {partial_sell_pct:.0f}% pct={pct_change:+.1f}% pnl={pnl_sol:+.6f} SOL",
                 )])
 
                 logger.success(
-                    "SIM SELL {} | {} | pct={:+.1f}% | pnl={:+.6f} SOL",
-                    pos.token.symbol, exit_reason, pct_change, pnl_sol,
+                    "PARTIAL SELL {} | {} | {:.0f}% of position | pct={:+.1f}% | pnl={:+.6f} SOL",
+                    pos.token.symbol, exit_label, partial_sell_pct, pct_change, pnl_sol,
                 )
 
+                if pos.remaining_size_pct <= 0:
+                    pos.status = PositionStatus.CLOSED
+                    pos.exit_price_usd = current_price
+                    pos.exit_reason = exit_label
+                    pos.closed_at = now
+                    if pnl_sol >= 0:
+                        self.state.daily_wins += 1
+                        self.state.loss_streak = 0
+                    else:
+                        self.state.daily_losses += 1
+                        self.state.loss_streak += 1
+                    continue
+
+            age_minutes = (now - pos.opened_at).total_seconds() / 60.0
+            if age_minutes > settings.MAX_TOKEN_AGE_MINUTES:
+                self._close_position(pid, pos, current_price, pct_change, "MAX_AGE_EXIT", now)
+
         self.persistence.save_state(self.state)
+
+    def _close_position(
+        self,
+        pid: str,
+        pos: Position,
+        current_price: float,
+        pct_change: float,
+        exit_reason: str,
+        now: datetime,
+    ) -> None:
+        remaining_size = pos.size_sol * (pos.remaining_size_pct / 100.0)
+        pnl_sol = remaining_size * (pct_change / 100.0)
+        pos.status = PositionStatus.CLOSED
+        pos.realized_pnl_sol += pnl_sol
+        pos.realized_pnl_usd = pos.realized_pnl_sol * current_price
+        pos.exit_price_usd = current_price
+        pos.exit_reason = exit_reason
+        pos.closed_at = now
+        pos.remaining_size_pct = 0.0
+
+        if pnl_sol >= 0:
+            self.state.daily_wins += 1
+            self.state.loss_streak = 0
+        else:
+            self.state.daily_losses += 1
+            self.state.loss_streak += 1
+        self.state.daily_realized_pnl_sol += pnl_sol
+
+        self.persistence.append_trades([TradeLogEntry(
+            id=str(uuid.uuid4()),
+            position_id=pid,
+            token_address=pos.token.token_address,
+            side="SELL",
+            size_sol=remaining_size,
+            price=current_price,
+            timestamp=now,
+            realized_pnl_sol=pnl_sol,
+            note=f"{exit_reason} pct={pct_change:+.1f}% pnl={pnl_sol:+.6f} SOL",
+        )])
+
+        logger.success(
+            "CLOSE {} | {} | pct={:+.1f}% | pnl={:+.6f} SOL",
+            pos.token.symbol, exit_reason, pct_change, pnl_sol,
+        )
 
     def _audit_scan_event(self, event: str, scanned_count: int) -> None:
         record = AuditRecord(
