@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import math
 import statistics
-import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from unittest.mock import patch
 
 from loguru import logger
 from pydantic import BaseModel, Field
@@ -16,19 +16,14 @@ from .interfaces import FeatureExtractor, Scorer
 from .models import (
     EngineState,
     EngineStatus,
-    FillResult,
     Mode,
     OrderRequest,
-    Position,
-    PositionStatus,
     TokenCandidate,
-    TradeLogEntry,
 )
 from .risk import (
     can_open_new_position,
     compute_position_size_sol,
     is_trading_halted,
-    reset_daily_if_needed,
 )
 from .safety import evaluate_safety
 from .scorer import ConfidenceScorer
@@ -129,6 +124,7 @@ class BacktestRunner:
         self._scorer = scorer or ConfidenceScorer()
         self._broker = PaperBroker(seed=broker_seed)
         self._wallet_balance_sol = wallet_balance_sol
+        self._open_exposure_sol = 0.0
 
     def run(self, scenarios: list[BacktestScenario]) -> BacktestReport:
         state = EngineState(
@@ -138,10 +134,15 @@ class BacktestRunner:
         )
 
         results: list[TradeResult] = []
+        self._open_exposure_sol = 0.0
+
+        def _fixed_balance(_mode: Mode) -> float:
+            return self._wallet_balance_sol
 
         for idx, scenario in enumerate(scenarios):
             label = scenario.label or f"scenario_{idx}"
-            result = self._run_scenario(state, scenario, label)
+            with patch("src.risk.get_wallet_balance_sol", _fixed_balance):
+                result = self._run_scenario(state, scenario, label)
             results.append(result)
 
             if result.decision not in ("REJECT",):
@@ -215,11 +216,7 @@ class BacktestRunner:
 
         size_sol = compute_position_size_sol(state, score)
 
-        open_size = sum(
-            r.size_sol for r in state.__dict__.get("_bt_open_positions", [])
-            if hasattr(r, "size_sol")
-        )
-        if not can_open_new_position(state, open_size, size_sol):
+        if not can_open_new_position(state, self._open_exposure_sol, size_sol):
             return TradeResult(
                 scenario_label=label,
                 token_symbol=token.symbol,
@@ -244,6 +241,8 @@ class BacktestRunner:
                 safety_risk_score=safety.risk_score,
             )
 
+        self._open_exposure_sol += fill.filled_size_sol
+
         entry_price_usd = token.price_usd if token.price_usd > 0 else 1.0
 
         exit_price_usd, exit_reason, hold_seconds = self._simulate_position(
@@ -258,6 +257,8 @@ class BacktestRunner:
             pnl_sol = 0.0
             exit_price_usd = entry_price_usd
             exit_reason = exit_reason or "NO_PRICE_DATA"
+
+        self._open_exposure_sol = max(0.0, self._open_exposure_sol - fill.filled_size_sol)
 
         return TradeResult(
             scenario_label=label,

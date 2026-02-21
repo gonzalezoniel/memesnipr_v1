@@ -1,5 +1,4 @@
 import argparse
-import sys
 
 from src.backtest import (
     BacktestRunner,
