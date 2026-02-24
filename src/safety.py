@@ -38,16 +38,10 @@ def evaluate_safety(token: TokenCandidate) -> SafetyResult:
             _add_reason("UNKNOWN_VOLUME", "Recent volume is unknown")
 
     if not token.safety_data_verified:
-        if not token.mint_authority_revoked:
-            _add_reason(
-                "UNVERIFIED_MINT_AUTHORITY",
-                "Mint authority status not verified on-chain — assuming active",
-            )
-        if not token.freeze_authority_revoked:
-            _add_reason(
-                "UNVERIFIED_FREEZE_AUTHORITY",
-                "Freeze authority status not verified on-chain — assuming active",
-            )
+        # When on-chain data is unavailable (e.g. DexScreener-only), treat
+        # mint/freeze authority as unknown rather than a hard block.
+        # The risk_score penalty below accounts for the uncertainty.
+        pass
 
     age_seconds = (datetime.now(timezone.utc) - token.created_at).total_seconds()
     age_minutes = age_seconds / 60.0
@@ -61,11 +55,14 @@ def evaluate_safety(token: TokenCandidate) -> SafetyResult:
             f"Token too old for snipe: {age_minutes:.1f} min > {settings.MAX_TOKEN_AGE_MINUTES}",
         )
 
-    # Hard blocks
-    if not token.mint_authority_revoked:
-        _add_reason("MINT_AUTHORITY_ACTIVE", "Mint authority not revoked")
-    if not token.freeze_authority_revoked:
-        _add_reason("FREEZE_AUTHORITY_ACTIVE", "Freeze authority not revoked")
+    # Hard blocks — only enforce when safety data is verified on-chain.
+    # If unverified, we lack the data to confirm status; penalise via
+    # risk_score instead of outright blocking.
+    if token.safety_data_verified:
+        if not token.mint_authority_revoked:
+            _add_reason("MINT_AUTHORITY_ACTIVE", "Mint authority not revoked")
+        if not token.freeze_authority_revoked:
+            _add_reason("FREEZE_AUTHORITY_ACTIVE", "Freeze authority not revoked")
 
     # Liquidity
     if token.liquidity_usd < settings.MIN_LIQUIDITY_USD:
@@ -99,7 +96,13 @@ def evaluate_safety(token: TokenCandidate) -> SafetyResult:
     if token.deployer_address and token.deployer_address in BAD_DEPLOYERS:
         _add_reason("BAD_DEPLOYER", "Deployer address flagged as bad")
 
+    # Base risk from hard-block reason codes
     risk_score = min(float(len(reason_codes) * 20), 100.0)
+
+    # Add a softer penalty when on-chain safety data is unavailable.
+    # This raises the bar without outright blocking every DexScreener token.
+    if not token.safety_data_verified:
+        risk_score = min(risk_score + 15.0, 100.0)
 
     return SafetyResult(
         passed=len(reason_codes) == 0,
