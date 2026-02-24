@@ -17,6 +17,7 @@ def _base_token() -> TokenCandidate:
         freeze_authority_revoked=True,
         is_honeypot=False,
         can_sell=True,
+        safety_data_verified=True,
         buys_5m=10,
         sells_5m=3,
         volume_usd_5m=10_000,
@@ -32,7 +33,11 @@ def test_safety_gate_passes_clean_token():
     assert result.risk_score == 0.0
 
 
-def test_safety_gate_rejects_unknown_signals_by_default():
+def test_safety_gate_rejects_unknown_signals_when_enabled(monkeypatch):
+    from src import config
+
+    monkeypatch.setattr(config.settings, "REJECT_ON_UNKNOWN_SIGNALS", True)
+
     token = _base_token()
     token.token_address = ""
     token.symbol = ""

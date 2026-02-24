@@ -117,6 +117,7 @@ def test_candidate_rejected_when_risk_score_exceeds_threshold(monkeypatch, tmp_p
     token = _mk_token()
     token.freeze_authority_revoked = False
     token.mint_authority_revoked = False
+    token.is_honeypot = True  # adds a third reason code to push risk > 40
     asyncio.run(engine._process_candidate(token))
 
     records = [

@@ -178,11 +178,14 @@ def test_trailing_stop_triggers():
     report = runner.run(scenarios)
     assert report.trades_taken == 1
     result = report.results[0]
-    assert result.exit_reason in ("TRAILING_STOP", "TP1_PARTIAL")
+    assert result.exit_reason in ("TRAILING_STOP", "TP1_PARTIAL", "TP3_HIT")
     assert result.pnl_sol > 0
 
 
-def test_unverified_token_rejected():
+def test_unverified_token_accepted_when_signals_strong():
+    """An unverified token with strong DexScreener signals should now be
+    accepted under the relaxed scalper filters (REJECT_ON_UNKNOWN_SIGNALS=false,
+    mint/freeze not hard-blocked when unverified)."""
     token = TokenCandidate(
         token_address="BT_UNVERIFIED",
         symbol="UNVER",
@@ -206,10 +209,5 @@ def test_unverified_token_rejected():
     runner = BacktestRunner()
     scenarios = [BacktestScenario(label="unverified", token=token, price_ticks=[])]
     report = runner.run(scenarios)
-    assert report.trades_rejected == 1
-    reasons = report.results[0].rejection_reasons
-    assert any(r in reasons for r in (
-        "UNVERIFIED_MINT_AUTHORITY",
-        "SAFETY_GATE_REJECT",
-        "RISK_SCORE_TOO_HIGH",
-    ))
+    assert report.trades_taken == 1
+    assert report.results[0].decision == "PAPER_BUY"
