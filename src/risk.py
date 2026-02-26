@@ -73,18 +73,20 @@ def compute_position_size_sol(state: EngineState, confidence_score: float) -> fl
     balance = get_wallet_balance_sol(state.mode)
     risk_pct = compute_risk_per_trade_pct(state)
 
-    # Small-by-default sizing for early trust building.
-    risk_pct *= 0.5
+    # Confidence-proportional sizing: higher score → bigger position.
+    # Floor at 0.6x for low-confidence entries, scale up to 1.4x for high.
+    conf_multiplier = 0.6 + 0.8 * min(confidence_score / 100.0, 1.0)
+    risk_pct *= conf_multiplier
 
-    # Scale only after repeated clean behavior and realized profits.
-    if (
-        confidence_score >= settings.HIGH_CONFIDENCE_SCORE
-        and state.daily_wins >= 2
-        and state.daily_realized_pnl_sol > 0
-    ):
+    # Win-streak momentum: scale up after consecutive profitable trades.
+    # 1 win = base, 2 wins + green day = 1.3x, 3+ wins = 1.5x
+    if state.daily_wins >= 3 and state.daily_realized_pnl_sol > 0:
         risk_pct *= 1.5
+    elif state.daily_wins >= 1 and state.daily_realized_pnl_sol > 0:
+        risk_pct *= 1.3
 
-    risk_pct = min(risk_pct, 1.0)  # never more than 1% of wallet
+    # Hard cap: never risk more than 5% of wallet on a single position
+    risk_pct = min(risk_pct, 5.0)
 
     size_sol = balance * (risk_pct / 100.0)
     return max(size_sol, 0.0001)  # ensure non-zero

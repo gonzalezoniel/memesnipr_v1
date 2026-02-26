@@ -30,32 +30,36 @@ class Settings(BaseSettings):
     CHAIN: str = "solana"
 
     # Safety thresholds
-    MIN_LIQUIDITY_USD: float = 5_000
-    MAX_BUY_TAX_PCT: float = 10.0
-    MAX_SELL_TAX_PCT: float = 10.0
-    MAX_TOKEN_AGE_MINUTES: int = 120
+    MIN_LIQUIDITY_USD: float = 3_000
+    MAX_BUY_TAX_PCT: float = 12.0
+    MAX_SELL_TAX_PCT: float = 12.0
+    MAX_TOKEN_AGE_MINUTES: int = 45
 
-    # Risk parameters (percent of wallet)
-    TEST_RISK_PER_TRADE_PCT: float = 0.10
-    TEST_MAX_OPEN_EXPOSURE_PCT: float = 1.0
-    LIVE_RISK_PER_TRADE_PCT: float = 0.50
-    LIVE_MAX_OPEN_EXPOSURE_PCT: float = 3.0
+    # Risk parameters — aggressive for $200 starting capital
+    # ~3% per trade = ~$6 per position, allows ~6 concurrent positions
+    TEST_RISK_PER_TRADE_PCT: float = 3.0
+    TEST_MAX_OPEN_EXPOSURE_PCT: float = 20.0
+    LIVE_RISK_PER_TRADE_PCT: float = 3.0
+    LIVE_MAX_OPEN_EXPOSURE_PCT: float = 20.0
 
-    MAX_TRADES_PER_DAY: int = 15
-    LOSS_STREAK_HALVE_RISK: int = 2
-    DAILY_MAX_LOSSES_HALT: int = 4
+    MAX_TRADES_PER_DAY: int = 40
+    LOSS_STREAK_HALVE_RISK: int = 3
+    DAILY_MAX_LOSSES_HALT: int = 8
 
-    # Profit ladder & stops
-    STOP_LOSS_PCT: float = 12.0
-    TP1_PCT: float = 12.0
-    TP2_PCT: float = 25.0
-    TP3_PCT: float = 50.0
-    TRAILING_STOP_PCT: float = 15.0
+    # Profit ladder & stops — tight stop, fast partials, let runners ride
+    STOP_LOSS_PCT: float = 8.0
+    TP1_PCT: float = 15.0
+    TP2_PCT: float = 40.0
+    TP3_PCT: float = 100.0
+    TRAILING_STOP_PCT: float = 10.0
 
-    # Confidence score thresholds
-    MIN_SCORE_TO_TRADE: int = 35
-    MAX_RISK_SCORE_TO_TRADE: int = 40
-    HIGH_CONFIDENCE_SCORE: int = 90
+    # Confidence score thresholds — aggressive entry, smart filtering
+    MIN_SCORE_TO_TRADE: int = 30
+    MAX_RISK_SCORE_TO_TRADE: int = 45
+    HIGH_CONFIDENCE_SCORE: int = 70
+
+    # Engine speed
+    SCAN_INTERVAL_SECONDS: int = 5
 
     # Early-launch trap heuristics
     SUSPICIOUS_LAUNCH_WINDOW_SECONDS: int = 120
