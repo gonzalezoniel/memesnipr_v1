@@ -92,7 +92,7 @@ class MemeSniprEngine:
                 self.state.last_error = str(e)
                 self.persistence.save_state(self.state)
 
-            await asyncio.sleep(10)
+            await asyncio.sleep(settings.SCAN_INTERVAL_SECONDS)
 
     async def _tick(self):
         self.state = reset_daily_if_needed(self.state)
