@@ -10,6 +10,7 @@ from .interfaces import Scanner
 from .models import TokenCandidate
 
 _DEXSCREENER_PROFILES_URL = "https://api.dexscreener.com/token-profiles/latest/v1"
+_DEXSCREENER_BOOSTS_URL = "https://api.dexscreener.com/token-boosts/latest/v1"
 _DEXSCREENER_TOKEN_URL = "https://api.dexscreener.com/latest/dex/tokens/{addresses}"
 _HTTP_TIMEOUT = 12.0
 _MAX_TOKENS_PER_BATCH = 30
@@ -67,7 +68,7 @@ class MockScanner(Scanner):
         ]
 
 
-_SEEN_TTL_SECONDS = 300
+_SEEN_TTL_SECONDS = 180
 
 
 class DexScreenerScanner(Scanner):
@@ -96,27 +97,36 @@ class DexScreenerScanner(Scanner):
         return candidates
 
     async def _fetch_latest_solana_addresses(self) -> list[str]:
-        try:
-            async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
-                resp = await client.get(_DEXSCREENER_PROFILES_URL)
-                resp.raise_for_status()
-                profiles = resp.json()
-        except Exception as exc:
-            logger.warning("DexScreener profiles fetch failed: {}", exc)
-            return []
-
         now_ts = datetime.now(timezone.utc).timestamp()
         expired = [a for a, t in self._seen.items() if now_ts - t > _SEEN_TTL_SECONDS]
         for a in expired:
             del self._seen[a]
 
         addresses: list[str] = []
-        for p in profiles:
-            if p.get("chainId") != "solana":
+
+        # Fetch from both profiles and boosted endpoints for wider coverage
+        for url, label in [
+            (_DEXSCREENER_PROFILES_URL, "profiles"),
+            (_DEXSCREENER_BOOSTS_URL, "boosts"),
+        ]:
+            try:
+                async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+                    resp = await client.get(url)
+                    resp.raise_for_status()
+                    items = resp.json()
+            except Exception as exc:
+                logger.warning("DexScreener {} fetch failed: {}", label, exc)
                 continue
-            addr = p.get("tokenAddress", "")
-            if addr and addr not in self._seen:
-                addresses.append(addr)
+
+            for p in items:
+                if p.get("chainId") != "solana":
+                    continue
+                addr = p.get("tokenAddress", "")
+                if addr and addr not in self._seen and addr not in addresses:
+                    addresses.append(addr)
+
+        logger.info("DexScreener discovery: {} new Solana addresses (seen cache: {})",
+                    len(addresses), len(self._seen))
         return addresses[:_MAX_TOKENS_PER_BATCH]
 
     async def _fetch_pair_data(self, addresses: list[str]) -> list[dict]:

@@ -81,9 +81,12 @@ def compute_confidence_components(token: TokenCandidate) -> ConfidenceComponents
         depth_ratio = min(liq / (settings.MIN_LIQUIDITY_USD * 5), 1.0)
         c.slippage_score = 12.0 * depth_ratio
 
-    # --- meta / verification status (range -3 … +3) ---
+    # --- meta / verification status (range -1 … +3) ---
+    # Reduced penalty for unverified tokens: DexScreener candidates rarely
+    # have on-chain verification, so a heavy penalty here blocked almost
+    # every candidate from reaching the confidence threshold.
     if not token.safety_data_verified:
-        c.meta_score = -3.0
+        c.meta_score = -1.0
     else:
         c.meta_score = 3.0
 

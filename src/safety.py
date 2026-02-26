@@ -46,14 +46,19 @@ def evaluate_safety(token: TokenCandidate) -> SafetyResult:
     age_seconds = (datetime.now(timezone.utc) - token.created_at).total_seconds()
     age_minutes = age_seconds / 60.0
 
-    # Token age check
+    # Soft risk accumulator for signals that should penalise risk_score
+    # without hard-blocking the token (safety.passed stays True).
+    soft_risk: float = 0.0
+
+    # Token age check — soft penalty, not hard block.
+    # The DexScreener profiles/boosts endpoints routinely surface tokens
+    # older than MAX_TOKEN_AGE_MINUTES.  A graduated risk penalty lets the
+    # risk-score gate handle them instead of rejecting outright.
     if age_minutes < 0:
         _add_reason("INVALID_TOKEN_AGE", "Token creation time is in the future")
-    if age_minutes > settings.MAX_TOKEN_AGE_MINUTES:
-        _add_reason(
-            "TOKEN_TOO_OLD",
-            f"Token too old for snipe: {age_minutes:.1f} min > {settings.MAX_TOKEN_AGE_MINUTES}",
-        )
+    elif age_minutes > settings.MAX_TOKEN_AGE_MINUTES:
+        hours_over = (age_minutes - settings.MAX_TOKEN_AGE_MINUTES) / 60.0
+        soft_risk += min(hours_over * 5.0, 25.0)
 
     # Hard blocks — only enforce when safety data is verified on-chain.
     # If unverified, we lack the data to confirm status; penalise via
@@ -96,8 +101,8 @@ def evaluate_safety(token: TokenCandidate) -> SafetyResult:
     if token.deployer_address and token.deployer_address in BAD_DEPLOYERS:
         _add_reason("BAD_DEPLOYER", "Deployer address flagged as bad")
 
-    # Base risk from hard-block reason codes
-    risk_score = min(float(len(reason_codes) * 20), 100.0)
+    # Base risk from hard-block reason codes + graduated soft penalties
+    risk_score = min(float(len(reason_codes) * 20) + soft_risk, 100.0)
 
     # Add a softer penalty when on-chain safety data is unavailable.
     # This raises the bar without outright blocking every DexScreener token.
