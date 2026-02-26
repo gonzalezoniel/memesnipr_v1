@@ -30,10 +30,10 @@ class Settings(BaseSettings):
     CHAIN: str = "solana"
 
     # Safety thresholds
-    MIN_LIQUIDITY_USD: float = 25_000
+    MIN_LIQUIDITY_USD: float = 5_000
     MAX_BUY_TAX_PCT: float = 10.0
     MAX_SELL_TAX_PCT: float = 10.0
-    MAX_TOKEN_AGE_MINUTES: int = 20
+    MAX_TOKEN_AGE_MINUTES: int = 120
 
     # Risk parameters (percent of wallet)
     TEST_RISK_PER_TRADE_PCT: float = 0.10
@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     TRAILING_STOP_PCT: float = 15.0
 
     # Confidence score thresholds
-    MIN_SCORE_TO_TRADE: int = 62
+    MIN_SCORE_TO_TRADE: int = 35
     MAX_RISK_SCORE_TO_TRADE: int = 40
     HIGH_CONFIDENCE_SCORE: int = 90
 
