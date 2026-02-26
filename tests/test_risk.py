@@ -12,7 +12,8 @@ from src.risk import (
 def test_position_size_respects_wallet_percentage():
     state = EngineState(mode=Mode.TEST, loss_streak=0)
     size = compute_position_size_sol(state, confidence_score=95)
-    assert size <= 0.01
+    # With 3% risk and confidence scaling, position can be up to 5% of wallet
+    assert size <= 0.05
     assert size > 0
 
 
@@ -38,5 +39,9 @@ def test_exposure_guard_blocks_oversized_position():
     state = EngineState(mode=Mode.TEST)
     open_exposure = compute_open_exposure_pct(state, open_positions_size_sol=0.008)
     assert open_exposure == 0.8
-    allowed = can_open_new_position(state, open_positions_size_sol=0.008, new_size_sol=0.004)
-    assert not allowed
+    # With 20% max exposure, 0.8% + 0.4% = 1.2% is well within limits
+    # Use values that actually exceed the 20% cap to test the guard
+    allowed_small = can_open_new_position(state, open_positions_size_sol=0.008, new_size_sol=0.004)
+    assert allowed_small  # 1.2% < 20%
+    allowed_big = can_open_new_position(state, open_positions_size_sol=0.19, new_size_sol=0.02)
+    assert not allowed_big  # 21% > 20%
