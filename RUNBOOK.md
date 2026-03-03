@@ -51,8 +51,8 @@ Set:
 Engine will halt new trading decisions on next tick.
 
 ## 4) Default trading gates
-- `MIN_SCORE_TO_TRADE=85` (confidence must be >= 85/100)
-- `MAX_RISK_SCORE_TO_TRADE=20` (risk must be <= 20/100)
+- `MIN_SCORE_TO_TRADE=60` (confidence must be >= 60/100)
+- `MAX_RISK_SCORE_TO_TRADE=30` (risk must be <= 30/100)
 - Hard blocks include active mint/freeze authority, low liquidity, honeypot/cannot-sell, bad deployer, and suspicious early holder concentration.
 
 

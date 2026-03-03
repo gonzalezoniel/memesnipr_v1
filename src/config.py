@@ -35,31 +35,40 @@ class Settings(BaseSettings):
     MAX_SELL_TAX_PCT: float = 12.0
     MAX_TOKEN_AGE_MINUTES: int = 45
 
-    # Risk parameters — aggressive for $200 starting capital
-    # ~3% per trade = ~$6 per position, allows ~6 concurrent positions
-    TEST_RISK_PER_TRADE_PCT: float = 3.0
-    TEST_MAX_OPEN_EXPOSURE_PCT: float = 20.0
-    LIVE_RISK_PER_TRADE_PCT: float = 3.0
-    LIVE_MAX_OPEN_EXPOSURE_PCT: float = 20.0
+    # Risk parameters — conservative for consistent profitability
+    # ~2% per trade = ~$4 per position, selective entries only
+    TEST_RISK_PER_TRADE_PCT: float = 2.0
+    TEST_MAX_OPEN_EXPOSURE_PCT: float = 15.0
+    LIVE_RISK_PER_TRADE_PCT: float = 2.0
+    LIVE_MAX_OPEN_EXPOSURE_PCT: float = 15.0
 
-    MAX_TRADES_PER_DAY: int = 40
-    LOSS_STREAK_HALVE_RISK: int = 3
-    DAILY_MAX_LOSSES_HALT: int = 8
+    MAX_TRADES_PER_DAY: int = 15
+    LOSS_STREAK_HALVE_RISK: int = 2
+    DAILY_MAX_LOSSES_HALT: int = 5
 
-    # Profit ladder & stops — tight stop, fast partials, let runners ride
-    STOP_LOSS_PCT: float = 8.0
-    TP1_PCT: float = 15.0
-    TP2_PCT: float = 40.0
-    TP3_PCT: float = 100.0
-    TRAILING_STOP_PCT: float = 10.0
+    # Profit ladder & stops — wider stop for meme volatility, take profits early
+    STOP_LOSS_PCT: float = 12.0
+    TP1_PCT: float = 10.0
+    TP2_PCT: float = 30.0
+    TP3_PCT: float = 80.0
+    TRAILING_STOP_PCT: float = 8.0
 
-    # Confidence score thresholds — aggressive entry, smart filtering
-    MIN_SCORE_TO_TRADE: int = 30
-    MAX_RISK_SCORE_TO_TRADE: int = 45
-    HIGH_CONFIDENCE_SCORE: int = 70
+    # Confidence score thresholds — selective entry, quality over quantity
+    MIN_SCORE_TO_TRADE: int = 60
+    MAX_RISK_SCORE_TO_TRADE: int = 30
+    HIGH_CONFIDENCE_SCORE: int = 75
 
     # Engine speed
     SCAN_INTERVAL_SECONDS: int = 5
+
+    # Trade pacing — prevent burst-trading at day start
+    MAX_NEW_POSITIONS_PER_SCAN: int = 2
+    MIN_SECONDS_BETWEEN_TRADES: int = 30
+
+    # Minimum quality filters for candidates
+    MIN_BUY_RATIO: float = 0.55
+    MIN_VOLUME_USD_5M: float = 1_000.0
+    MIN_TRANSACTIONS_5M: int = 5
 
     # Early-launch trap heuristics
     SUSPICIOUS_LAUNCH_WINDOW_SECONDS: int = 120

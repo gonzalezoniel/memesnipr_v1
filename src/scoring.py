@@ -33,8 +33,8 @@ def compute_confidence_components(token: TokenCandidate) -> ConfidenceComponents
     elif token.safety_data_verified:
         c.contract_safety_score = 6.0
     elif token.can_sell and not token.is_honeypot:
-        # Unverified but at least tradeable per DexScreener
-        c.contract_safety_score = 5.0
+        # Unverified but at least tradeable per DexScreener — penalise more
+        c.contract_safety_score = 3.0
     else:
         c.contract_safety_score = 0.0
 
@@ -48,19 +48,25 @@ def compute_confidence_components(token: TokenCandidate) -> ConfidenceComponents
         c.liquidity_score = 20.0 * norm
 
     # --- buy/sell flow (max 28) — primary signal for meme sniping ---
-    if token.buys_5m + token.sells_5m > 0:
-        buy_ratio = token.buys_5m / max(1, token.buys_5m + token.sells_5m)
+    total_txns = token.buys_5m + token.sells_5m
+    if total_txns > 0:
+        buy_ratio = token.buys_5m / max(1, total_txns)
     else:
         buy_ratio = 0.0
 
-    if buy_ratio > 0.75 and token.volume_usd_5m > settings.MIN_LIQUIDITY_USD * 0.1:
+    # Require meaningful transaction density alongside buy dominance.
+    # Low-txn tokens with a high buy ratio are often illiquid traps.
+    has_density = total_txns >= 10
+    has_some_density = total_txns >= 5
+
+    if buy_ratio > 0.75 and has_density and token.volume_usd_5m > settings.MIN_LIQUIDITY_USD * 0.15:
         c.flow_score = 28.0
-    elif buy_ratio > 0.65 and token.volume_usd_5m > settings.MIN_LIQUIDITY_USD * 0.05:
-        c.flow_score = 22.0
-    elif buy_ratio > 0.55:
-        c.flow_score = 14.0
-    elif buy_ratio > 0.45:
-        c.flow_score = 6.0
+    elif buy_ratio > 0.70 and has_density and token.volume_usd_5m > settings.MIN_LIQUIDITY_USD * 0.1:
+        c.flow_score = 24.0
+    elif buy_ratio > 0.65 and has_some_density and token.volume_usd_5m > settings.MIN_LIQUIDITY_USD * 0.05:
+        c.flow_score = 18.0
+    elif buy_ratio > 0.55 and has_some_density:
+        c.flow_score = 10.0
     else:
         c.flow_score = 0.0
 
@@ -89,13 +95,19 @@ def compute_confidence_components(token: TokenCandidate) -> ConfidenceComponents
 
     # --- volume momentum (max 25) — key momentum signal ---
     vol = token.volume_usd_5m
-    total_txns = token.buys_5m + token.sells_5m
-    if _is_unknown(vol) or vol <= 0 or total_txns < 3:
+    # total_txns already computed above for flow scoring
+    if _is_unknown(vol) or vol <= 0 or total_txns < 5:
         c.volume_momentum_score = 0.0
     else:
         vol_ratio = min(vol / (settings.MIN_LIQUIDITY_USD * 2), 1.0)
         txn_density = min(total_txns / 50.0, 1.0)
-        c.volume_momentum_score = 25.0 * (vol_ratio * 0.5 + txn_density * 0.5)
+        # Add volume-per-transaction quality signal: higher avg trade size
+        # suggests organic interest rather than bot wash trading.
+        avg_trade_size = vol / max(1, total_txns)
+        quality_bonus = min(avg_trade_size / 500.0, 1.0)  # max bonus at $500/txn
+        c.volume_momentum_score = 25.0 * (
+            vol_ratio * 0.4 + txn_density * 0.35 + quality_bonus * 0.25
+        )
 
     return c
 

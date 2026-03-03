@@ -62,6 +62,10 @@ class MemeSniprEngine:
         self.risk_checker = risk_checker or ExposureRiskChecker(self.state)
         self._lock = asyncio.Lock()
 
+        # Trade pacing: track last trade time and per-scan counter
+        self._last_trade_at: datetime | None = None
+        self._scan_trades_opened: int = 0
+
 
     def _ensure_mode_ready(self):
         try:
@@ -124,7 +128,15 @@ class MemeSniprEngine:
         candidates = await self.scanner.scan_candidates()
         self._audit_scan_event("SCAN_STARTED", scanned_count=len(candidates))
 
+        # Reset per-scan trade counter
+        self._scan_trades_opened = 0
+
         for token in candidates:
+            # Enforce per-scan position limit to prevent burst-trading
+            if self._scan_trades_opened >= settings.MAX_NEW_POSITIONS_PER_SCAN:
+                logger.info("Per-scan position limit ({}) reached, skipping remaining candidates",
+                            settings.MAX_NEW_POSITIONS_PER_SCAN)
+                break
             await self._process_candidate(token)
 
         self._audit_scan_event("SCAN_COMPLETED", scanned_count=len(candidates))
@@ -136,6 +148,62 @@ class MemeSniprEngine:
         self.state.last_heartbeat = datetime.now(timezone.utc)
 
     async def _process_candidate(self, token: TokenCandidate):
+        # --- Duplicate token protection: skip if already holding this token ---
+        for pos in self.positions.values():
+            if pos.status == PositionStatus.OPEN and pos.token.token_address == token.token_address:
+                return
+
+        # --- Trade cooldown: enforce minimum time between entries ---
+        now = datetime.now(timezone.utc)
+        if self._last_trade_at is not None:
+            elapsed = (now - self._last_trade_at).total_seconds()
+            if elapsed < settings.MIN_SECONDS_BETWEEN_TRADES:
+                return
+
+        # --- Pre-filter: minimum quality thresholds before full scoring ---
+        prefilter_thresholds = {
+            "min_score_to_trade": float(settings.MIN_SCORE_TO_TRADE),
+            "min_liquidity_usd": float(settings.MIN_LIQUIDITY_USD),
+            "max_buy_tax_pct": float(settings.MAX_BUY_TAX_PCT),
+            "max_sell_tax_pct": float(settings.MAX_SELL_TAX_PCT),
+            "max_risk_score_to_trade": float(settings.MAX_RISK_SCORE_TO_TRADE),
+        }
+
+        total_txns = token.buys_5m + token.sells_5m
+        if total_txns < settings.MIN_TRANSACTIONS_5M:
+            self._audit(
+                token,
+                reason_codes=["LOW_TRANSACTION_DENSITY"],
+                scores={"total_txns_5m": float(total_txns)},
+                thresholds=prefilter_thresholds,
+                decision="REJECT",
+                next_actions=["skip_token", "continue_scanning"],
+            )
+            return
+
+        buy_ratio = token.buys_5m / max(1, total_txns)
+        if buy_ratio < settings.MIN_BUY_RATIO:
+            self._audit(
+                token,
+                reason_codes=["LOW_BUY_RATIO"],
+                scores={"buy_ratio_5m": float(buy_ratio)},
+                thresholds=prefilter_thresholds,
+                decision="REJECT",
+                next_actions=["skip_token", "continue_scanning"],
+            )
+            return
+
+        if token.volume_usd_5m < settings.MIN_VOLUME_USD_5M:
+            self._audit(
+                token,
+                reason_codes=["LOW_VOLUME"],
+                scores={"volume_usd_5m": float(token.volume_usd_5m)},
+                thresholds=prefilter_thresholds,
+                decision="REJECT",
+                next_actions=["skip_token", "continue_scanning"],
+            )
+            return
+
         safety = evaluate_safety(token)
         features = self.feature_extractor.extract(token)
         scores = self.scorer.score(token, features)
@@ -245,6 +313,8 @@ class MemeSniprEngine:
         )
 
         self.state.daily_trades += 1
+        self._last_trade_at = datetime.now(timezone.utc)
+        self._scan_trades_opened += 1
 
         logger.success(
             "SIM BUY {} | {:.6f} SOL | score {:.1f}",
