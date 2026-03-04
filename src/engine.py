@@ -258,7 +258,17 @@ class MemeSniprEngine:
             )
             return
 
-        size_sol = compute_position_size_sol(self.state, score)
+        social_score = scores.get("social_signal", 0.0)
+        size_sol = compute_position_size_sol(
+            self.state, score, social_signal_score=social_score,
+        )
+
+        if social_score > 0:
+            logger.info(
+                "Social signal active for {}: score={:.1f} (total={:.1f})",
+                token.symbol, social_score, score,
+            )
+
         await self._execute_order_pipeline(
             OrderRequest(token=token, side="BUY", size_sol=size_sol, score=score),
             thresholds=thresholds,
