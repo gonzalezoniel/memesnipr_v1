@@ -10,7 +10,7 @@ from fastapi.responses import HTMLResponse
 from loguru import logger
 
 from src.engine import engine
-from src.social_signals import fetch_memecoin_signals, get_cached_signal_count, get_last_fetch_time, _cached_signals
+from src.social_signals import fetch_memecoin_signals, get_cached_signal_count, get_last_fetch_time
 from src.storage import load_engine_state, load_recent_audit_records, load_recent_trades, summarize_audit_records
 
 
