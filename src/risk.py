@@ -69,7 +69,11 @@ def compute_max_open_exposure_pct(state: EngineState) -> float:
     return settings.LIVE_MAX_OPEN_EXPOSURE_PCT
 
 
-def compute_position_size_sol(state: EngineState, confidence_score: float) -> float:
+def compute_position_size_sol(
+    state: EngineState,
+    confidence_score: float,
+    social_signal_score: float = 0.0,
+) -> float:
     balance = get_wallet_balance_sol(state.mode)
     risk_pct = compute_risk_per_trade_pct(state)
 
@@ -78,6 +82,16 @@ def compute_position_size_sol(state: EngineState, confidence_score: float) -> fl
     # Tighter range than before to avoid oversizing on marginal signals.
     conf_multiplier = 0.7 + 0.5 * min(confidence_score / 100.0, 1.0)
     risk_pct *= conf_multiplier
+
+    # Social signal boost: tokens with strong social buzz get up to +30%
+    # bigger positions.  social_signal_score ranges from 0.0 to 8.0.
+    if social_signal_score > 0:
+        social_boost = 1.0 + 0.30 * min(social_signal_score / settings.SOCIAL_SIGNAL_WEIGHT, 1.0)
+        risk_pct *= social_boost
+        logger.debug(
+            "Social signal boost: score={:.1f} multiplier={:.2f}",
+            social_signal_score, social_boost,
+        )
 
     # Progressive daily-loss throttle: reduce position size as losses
     # accumulate, even before the hard halt threshold.  Each loss
