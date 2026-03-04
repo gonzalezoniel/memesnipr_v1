@@ -29,6 +29,7 @@ from .persistence import JsonPersistence
 from .risk_checks import ExposureRiskChecker
 from .scorer import ConfidenceScorer
 from .safety import evaluate_safety
+from .social_signals import fetch_memecoin_signals
 from .risk import (
     compute_position_size_sol,
     reset_daily_if_needed,
@@ -124,6 +125,12 @@ class MemeSniprEngine:
         self.state.status = EngineStatus.SCANNING
         self.state.last_scan_at = datetime.now(timezone.utc)
         self.persistence.save_state(self.state)
+
+        # Refresh social signal cache from the centralized Signal Engine
+        try:
+            await fetch_memecoin_signals()
+        except Exception as e:
+            logger.warning("Social signal refresh failed (non-blocking): {}", e)
 
         candidates = await self.scanner.scan_candidates()
         self._audit_scan_event("SCAN_STARTED", scanned_count=len(candidates))

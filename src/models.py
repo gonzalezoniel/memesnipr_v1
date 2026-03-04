@@ -60,6 +60,7 @@ class ConfidenceComponents(BaseModel):
     slippage_score: float = 0.0
     meta_score: float = 0.0
     volume_momentum_score: float = 0.0
+    social_signal_score: float = 0.0
 
     @property
     def total_score(self) -> float:
@@ -71,6 +72,7 @@ class ConfidenceComponents(BaseModel):
             + self.slippage_score
             + self.meta_score
             + self.volume_momentum_score
+            + self.social_signal_score
         )
 
 

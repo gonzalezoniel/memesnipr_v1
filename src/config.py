@@ -75,6 +75,10 @@ class Settings(BaseSettings):
     SUSPICIOUS_MAX_TOP_HOLDER_PCT: float = 35.0
     SUSPICIOUS_MAX_HOLDER_COUNT: int = 50
 
+    # Social Signal Engine
+    SOCIAL_SIGNAL_ENGINE_URL: str = "https://app-sgvdyzun.fly.dev"
+    SOCIAL_SIGNAL_WEIGHT: float = 8.0  # max score contribution from social signals
+
     # Storage paths
     ENGINE_STATE_PATH: str = "data/engine_state.json"
     TRADES_LOG_PATH: str = "data/trades_log.jsonl"
