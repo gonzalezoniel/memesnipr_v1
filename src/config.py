@@ -42,9 +42,9 @@ class Settings(BaseSettings):
     LIVE_RISK_PER_TRADE_PCT: float = 2.0
     LIVE_MAX_OPEN_EXPOSURE_PCT: float = 15.0
 
-    MAX_TRADES_PER_DAY: int = 15
-    LOSS_STREAK_HALVE_RISK: int = 2
-    DAILY_MAX_LOSSES_HALT: int = 5
+    MAX_TRADES_PER_DAY: int = 30
+    LOSS_STREAK_HALVE_RISK: int = 3
+    DAILY_MAX_LOSSES_HALT: int = 8
 
     # Profit ladder & stops — wider stop for meme volatility, take profits early
     STOP_LOSS_PCT: float = 12.0
@@ -62,8 +62,8 @@ class Settings(BaseSettings):
     SCAN_INTERVAL_SECONDS: int = 5
 
     # Trade pacing — prevent burst-trading at day start
-    MAX_NEW_POSITIONS_PER_SCAN: int = 2
-    MIN_SECONDS_BETWEEN_TRADES: int = 30
+    MAX_NEW_POSITIONS_PER_SCAN: int = 3
+    MIN_SECONDS_BETWEEN_TRADES: int = 10
 
     # Minimum quality filters for candidates
     MIN_BUY_RATIO: float = 0.55
