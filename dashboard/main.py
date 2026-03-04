@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse
 from loguru import logger
 
 from src.engine import engine
+from src.social_signals import fetch_memecoin_signals, get_cached_signal_count, get_last_fetch_time, _cached_signals
 from src.storage import load_engine_state, load_recent_audit_records, load_recent_trades, summarize_audit_records
 
 
@@ -87,6 +88,20 @@ async def positions():
         d["token_address"] = pos.token.token_address
         pos_list.append(d)
     return pos_list
+
+
+@app.get("/api/social-signals")
+async def social_signals_endpoint():
+    """Fetch latest memecoin social signals from the centralized Signal Engine."""
+    signals = await fetch_memecoin_signals()
+    last_fetch = get_last_fetch_time()
+    return {
+        "status": "ok",
+        "signals": signals,
+        "count": len(signals),
+        "cached_count": get_cached_signal_count(),
+        "last_fetch": last_fetch.isoformat() if last_fetch else None,
+    }
 
 
 @app.get("/")
@@ -238,10 +253,105 @@ async def root():
             </table>
           </div>
 
+          <div class="card">
+            <h2>Social Signals Intelligence</h2>
+            <p style="color:#9ca3af;font-size:0.85rem;margin-bottom:1rem;">
+              Live memecoin sentiment from the Social Signal Engine &mdash; influences confidence scoring and position sizing.
+            </p>
+            <div id="ss-meta" style="display:flex;gap:1rem;flex-wrap:wrap;margin-bottom:1rem;">
+              <span style="font-size:0.8rem;padding:4px 10px;border-radius:999px;background:rgba(30,64,175,0.18);color:#bfdbfe;border:1px solid rgba(59,130,246,0.35);" id="ss-count">Signals: loading...</span>
+              <span style="font-size:0.8rem;padding:4px 10px;border-radius:999px;background:rgba(30,64,175,0.18);color:#bfdbfe;border:1px solid rgba(59,130,246,0.35);" id="ss-updated">Updated: ...</span>
+            </div>
+            <button onclick="refreshSocial()" style="padding:8px 16px;border-radius:999px;border:none;background:linear-gradient(135deg,#4f46e5,#6366f1);color:white;font-size:0.85rem;cursor:pointer;margin-bottom:1rem;">Refresh Social Signals</button>
+            <div id="ss-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;"></div>
+
+            <div style="margin-top:1.2rem;padding-top:0.8rem;border-top:1px solid rgba(31,41,55,0.6);">
+              <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.08em;color:#9ca3af;margin-bottom:0.5rem;">HOW SIGNALS AFFECT DECISIONS</div>
+              <div style="font-size:0.82rem;color:#9ca3af;line-height:1.6;">
+                <strong style="color:#e5e7eb;">Scoring Boost (up to +8 pts):</strong>
+                Mentions (&ge;10: +3, &ge;5: +2, &ge;2: +1) + Sentiment (&gt;0.3: +2, &gt;0.1: +1.5) + Trend (rising: +2, stable: +1) + Engagement (+1)<br/>
+                <strong style="color:#e5e7eb;">Position Size Boost:</strong>
+                Social score scales position size up to +30% larger when signals are strong.<br/>
+                <strong style="color:#e5e7eb;">Net Effect:</strong>
+                Tokens with high social buzz get higher confidence scores AND bigger positions.
+              </div>
+            </div>
+          </div>
+
           <p class="muted" style="text-align:center">
             Auto-refreshes every 15s &bull; Scanning real Solana tokens via DexScreener
           </p>
         </div>
+        <script>
+          async function refreshSocial() {{
+            try {{
+              const resp = await fetch('/api/social-signals');
+              const data = await resp.json();
+              const signals = data.signals || [];
+              document.getElementById('ss-count').textContent = 'Signals: ' + (data.count || 0);
+              document.getElementById('ss-updated').textContent = data.last_fetch
+                ? 'Updated: ' + new Date(data.last_fetch).toLocaleTimeString()
+                : 'Updated: never';
+              const grid = document.getElementById('ss-grid');
+              if (!signals.length) {{
+                grid.innerHTML = '<div style="color:#6b7280;">No social signals available yet. Engine fetches data each tick.</div>';
+                return;
+              }}
+              grid.innerHTML = signals.map(sig => {{
+                const token = sig.token || '???';
+                const mentions = sig.mentions || 0;
+                const sentiment = parseFloat(sig.sentiment || 0);
+                const trend = sig.trend || 'unknown';
+                const engagement = parseFloat(sig.engagement || 0);
+                const sources = (sig.sources || []).join(', ') || 'N/A';
+
+                const sentColor = sentiment > 0.3 ? '#4ade80' : sentiment > 0.1 ? '#facc15' : sentiment > 0 ? '#9ca3af' : '#f87171';
+                const trendColor = trend === 'rising' ? '#4ade80' : trend === 'stable' ? '#facc15' : '#9ca3af';
+
+                let scoreEst = 0;
+                if (mentions >= 10) scoreEst += 3;
+                else if (mentions >= 5) scoreEst += 2;
+                else if (mentions >= 2) scoreEst += 1;
+                if (sentiment > 0.3) scoreEst += 2;
+                else if (sentiment > 0.1) scoreEst += 1.5;
+                else if (sentiment > 0) scoreEst += 1;
+                if (trend === 'rising') scoreEst += 2;
+                else if (trend === 'stable') scoreEst += 1;
+                if (engagement > 0) scoreEst += 1;
+                scoreEst = Math.min(scoreEst, 8);
+                const scorePct = Math.round((scoreEst / 8) * 100);
+                const barColor = scoreEst >= 6 ? '#22c55e' : scoreEst >= 3 ? '#eab308' : '#6b7280';
+
+                let influence = '';
+                if (scoreEst >= 6) {{
+                  influence = '<div style="margin-top:8px;padding:6px 10px;border-radius:8px;font-size:0.78rem;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.25);color:#86efac;">Strong signal &mdash; +' + Math.round(30 * scoreEst / 8) + '% position size boost + score boost</div>';
+                }} else if (scoreEst >= 3) {{
+                  influence = '<div style="margin-top:8px;padding:6px 10px;border-radius:8px;font-size:0.78rem;background:rgba(234,179,8,0.08);border:1px solid rgba(234,179,8,0.25);color:#fde68a;">Moderate signal &mdash; +' + Math.round(30 * scoreEst / 8) + '% position size boost</div>';
+                }} else if (scoreEst > 0) {{
+                  influence = '<div style="margin-top:8px;padding:6px 10px;border-radius:8px;font-size:0.78rem;background:rgba(107,114,128,0.1);border:1px solid rgba(107,114,128,0.25);color:#9ca3af;">Weak signal &mdash; minimal impact on sizing</div>';
+                }}
+
+                return `
+                  <div style="background:rgba(10,18,36,0.85);border:1px solid rgba(148,163,184,0.18);border-radius:14px;padding:14px;">
+                    <div style="font-size:1rem;font-weight:700;color:#f9fafb;margin-bottom:6px;">${{token}}</div>
+                    <div style="display:flex;justify-content:space-between;font-size:0.82rem;color:#9ca3af;"><span>Social Score</span><span style="color:#e5e7eb;font-weight:500">${{scoreEst.toFixed(1)}} / 8.0</span></div>
+                    <div style="height:5px;border-radius:999px;background:rgba(148,163,184,0.15);margin-top:3px;overflow:hidden;"><div style="height:100%;width:${{scorePct}}%;border-radius:999px;background:${{barColor}};"></div></div>
+                    <div style="display:flex;justify-content:space-between;font-size:0.82rem;color:#9ca3af;margin-top:5px;"><span>Mentions</span><span style="color:#e5e7eb;font-weight:500">${{mentions}}</span></div>
+                    <div style="display:flex;justify-content:space-between;font-size:0.82rem;color:#9ca3af;margin-top:3px;"><span>Sentiment</span><span style="color:${{sentColor}};font-weight:500">${{sentiment.toFixed(2)}}</span></div>
+                    <div style="display:flex;justify-content:space-between;font-size:0.82rem;color:#9ca3af;margin-top:3px;"><span>Trend</span><span style="color:${{trendColor}};font-weight:500">${{trend}}</span></div>
+                    <div style="display:flex;justify-content:space-between;font-size:0.82rem;color:#9ca3af;margin-top:3px;"><span>Engagement</span><span style="color:#e5e7eb;font-weight:500">${{engagement.toFixed(1)}}</span></div>
+                    <div style="display:flex;justify-content:space-between;font-size:0.82rem;color:#9ca3af;margin-top:3px;"><span>Sources</span><span style="color:#e5e7eb;font-weight:500">${{sources}}</span></div>
+                    ${{influence}}
+                  </div>
+                `;
+              }}).join('');
+            }} catch(e) {{
+              document.getElementById('ss-grid').innerHTML = '<div style="color:#6b7280;">Error loading social signals.</div>';
+            }}
+          }}
+          refreshSocial();
+          setInterval(refreshSocial, 15000);
+        </script>
       </body>
     </html>
     """
