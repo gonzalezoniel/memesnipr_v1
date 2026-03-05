@@ -410,16 +410,32 @@ class MemeSniprEngine:
 
             pct_change = ((current_price - pos.entry_price_usd) / pos.entry_price_usd) * 100.0
 
-            if pct_change <= -settings.STOP_LOSS_PCT:
-                self._close_position(pid, pos, current_price, pct_change, "STOP_LOSS", now)
+            # --- Adaptive stop loss: breakeven after TP1 ---
+            effective_stop_pct = settings.STOP_LOSS_PCT
+            if settings.BREAKEVEN_AFTER_TP1 and pos.tp1_hit:
+                # After first take-profit, worst case is breakeven (0% loss)
+                effective_stop_pct = 0.0
+
+            if pct_change <= -effective_stop_pct:
+                stop_label = "STOP_LOSS" if not pos.tp1_hit else "BREAKEVEN_STOP"
+                self._close_position(pid, pos, current_price, pct_change, stop_label, now)
                 continue
+
+            # --- Adaptive trailing stop: tightens as TPs are hit ---
+            if pos.tp2_hit:
+                active_trailing_pct = settings.TRAILING_STOP_AFTER_TP2_PCT
+            elif pos.tp1_hit:
+                active_trailing_pct = settings.TRAILING_STOP_AFTER_TP1_PCT
+            else:
+                active_trailing_pct = settings.TRAILING_STOP_PCT
 
             if pos.peak_price_usd > pos.entry_price_usd:
                 drop_from_peak = ((pos.peak_price_usd - current_price) / pos.peak_price_usd) * 100.0
-                if drop_from_peak >= settings.TRAILING_STOP_PCT and pct_change > 0:
+                if drop_from_peak >= active_trailing_pct and pct_change > 0:
                     self._close_position(pid, pos, current_price, pct_change, "TRAILING_STOP", now)
                     continue
 
+            # --- Configurable partial take-profit sizes ---
             partial_sell_pct = 0.0
             exit_label = ""
 
@@ -429,11 +445,11 @@ class MemeSniprEngine:
                 exit_label = "TP3_HIT"
             elif not pos.tp2_hit and pct_change >= settings.TP2_PCT:
                 pos.tp2_hit = True
-                partial_sell_pct = min(33.0, pos.remaining_size_pct)
+                partial_sell_pct = min(settings.TP2_SELL_PCT, pos.remaining_size_pct)
                 exit_label = "TP2_PARTIAL"
             elif not pos.tp1_hit and pct_change >= settings.TP1_PCT:
                 pos.tp1_hit = True
-                partial_sell_pct = min(33.0, pos.remaining_size_pct)
+                partial_sell_pct = min(settings.TP1_SELL_PCT, pos.remaining_size_pct)
                 exit_label = "TP1_PARTIAL"
 
             if partial_sell_pct > 0:
