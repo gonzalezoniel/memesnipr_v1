@@ -42,16 +42,23 @@ class Settings(BaseSettings):
     LIVE_RISK_PER_TRADE_PCT: float = 2.0
     LIVE_MAX_OPEN_EXPOSURE_PCT: float = 15.0
 
+    # Asymmetric risk control — cut losses fast, protect winners
+    BREAKEVEN_AFTER_TP1: bool = True
+
     MAX_TRADES_PER_DAY: int = 30
     LOSS_STREAK_HALVE_RISK: int = 3
     DAILY_MAX_LOSSES_HALT: int = 8
 
-    # Profit ladder & stops — wider stop for meme volatility, take profits early
-    STOP_LOSS_PCT: float = 12.0
-    TP1_PCT: float = 10.0
-    TP2_PCT: float = 30.0
-    TP3_PCT: float = 80.0
-    TRAILING_STOP_PCT: float = 8.0
+    # Profit ladder & stops — tight stop, fast partials, protect winners
+    STOP_LOSS_PCT: float = 8.0
+    TP1_PCT: float = 12.0
+    TP1_SELL_PCT: float = 50.0
+    TP2_PCT: float = 40.0
+    TP2_SELL_PCT: float = 30.0
+    TP3_PCT: float = 100.0
+    TRAILING_STOP_PCT: float = 6.0
+    TRAILING_STOP_AFTER_TP1_PCT: float = 5.0
+    TRAILING_STOP_AFTER_TP2_PCT: float = 4.0
 
     # Confidence score thresholds — selective entry, quality over quantity
     MIN_SCORE_TO_TRADE: int = 60
