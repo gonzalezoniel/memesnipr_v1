@@ -40,9 +40,13 @@ class TokenCandidate(BaseModel):
     volume_usd_5m: float = 0.0
 
     top_holder_pct: float = 0.0
+    top_3_wallets_pct: float = 0.0  # v2: top 3 wallet supply %
     holder_count: int = 0
 
     price_usd: float = 0.0
+    price_1m_ago: float = 0.0  # v2: for momentum confirmation
+    baseline_volume: float = 0.0  # v2: baseline volume for spike detection
+    previous_liquidity: float = 0.0  # v2: for liquidity increase detection
 
 
 class SafetyResult(BaseModel):
@@ -61,6 +65,12 @@ class ConfidenceComponents(BaseModel):
     meta_score: float = 0.0
     volume_momentum_score: float = 0.0
     social_signal_score: float = 0.0
+    # v2 components
+    momentum_score: float = 0.0
+    social_momentum_score: float = 0.0
+    wallet_accumulation_score: float = 0.0
+    token_age_score: float = 0.0
+    holder_distribution_score: float = 0.0
 
     @property
     def total_score(self) -> float:
@@ -102,6 +112,14 @@ class Position(BaseModel):
     tp2_hit: bool = False
     tp3_hit: bool = False
     principal_recovered: bool = False
+    breakeven_stop_active: bool = False  # v2: breakeven stop engaged
+
+    # v2: enhanced logging fields
+    confidence_score: float = 0.0
+    social_score: float = 0.0
+    wallet_score: float = 0.0
+    momentum_score: float = 0.0
+    entry_reasons: list[str] = Field(default_factory=list)
 
 
 class TradeLogEntry(BaseModel):
@@ -115,6 +133,15 @@ class TradeLogEntry(BaseModel):
     realized_pnl_sol: float = 0.0
     realized_pnl_usd: float = 0.0
     note: Optional[str] = None
+    # v2: enhanced trade logging (Section 12)
+    pnl_pct: float = 0.0
+    social_score: float = 0.0
+    wallet_score: float = 0.0
+    momentum_score: float = 0.0
+    liquidity: float = 0.0
+    volume: float = 0.0
+    entry_reason: Optional[str] = None
+    exit_reason: Optional[str] = None
 
 
 class EngineState(BaseModel):
@@ -131,6 +158,9 @@ class EngineState(BaseModel):
     daily_realized_pnl_usd: float = 0.0
     loss_streak: int = 0
     halted_reason: Optional[str] = None
+    # v2: trade frequency tracking (Section 10)
+    hourly_trades: int = 0
+    last_loss_at: Optional[datetime] = None
 
 
 class AuditRecord(BaseModel):

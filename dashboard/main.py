@@ -14,7 +14,7 @@ from src.social_signals import fetch_memecoin_signals, get_cached_signal_count, 
 from src.storage import load_engine_state, load_recent_audit_records, load_recent_trades, summarize_audit_records
 
 
-app = FastAPI(title="MEMESNIPR v1", version="0.1.0")
+app = FastAPI(title="MEMESNIPR v2", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -88,6 +88,27 @@ async def positions():
         d["token_address"] = pos.token.token_address
         pos_list.append(d)
     return pos_list
+
+
+@app.get("/api/strategy-metrics")
+async def strategy_metrics_endpoint():
+    """v2: Strategy performance metrics (Section 13)."""
+    return engine.get_strategy_metrics()
+
+
+@app.get("/api/live-metrics")
+async def live_metrics_endpoint():
+    """v2: Live system metrics (Section 13)."""
+    return engine.get_live_system_metrics()
+
+
+@app.get("/api/wallet-intelligence")
+async def wallet_intelligence_endpoint():
+    """v2: Wallet intelligence summary (Section 13)."""
+    from src.wallet_tracker import get_wallet_intelligence_summary
+    from src.smart_wallet_engine import get_smart_wallet_engine
+    wallet_engine = get_smart_wallet_engine()
+    return get_wallet_intelligence_summary(wallet_engine)
 
 
 @app.get("/api/social-signals")
@@ -205,7 +226,7 @@ async def root():
       <body>
         <div class="container">
           <div class="card">
-            <h1>MEMESNIPR v1
+            <h1>MEMESNIPR v2
               <span class="badge {'badge-ok' if state.status.value != 'ERROR' else 'badge-error'}">{state.status.value}</span>
             </h1>
             <div class="grid">
@@ -251,6 +272,24 @@ async def root():
               </tr></thead>
               <tbody>{trade_rows}</tbody>
             </table>
+          </div>
+
+          <!-- v2: Strategy Metrics Section (Section 13) -->
+          <div class="card">
+            <h2>Strategy Metrics</h2>
+            <div id="strat-metrics" class="grid"></div>
+          </div>
+
+          <!-- v2: Live System Metrics Section (Section 13) -->
+          <div class="card">
+            <h2>Live System Metrics</h2>
+            <div id="live-metrics" class="grid"></div>
+          </div>
+
+          <!-- v2: Wallet Intelligence Section (Section 13) -->
+          <div class="card">
+            <h2>Wallet Intelligence</h2>
+            <div id="wallet-intel" class="grid"></div>
           </div>
 
           <div class="card">
@@ -351,6 +390,59 @@ async def root():
           }}
           refreshSocial();
           setInterval(refreshSocial, 15000);
+
+          // v2: Strategy Metrics
+          async function refreshStratMetrics() {{
+            try {{
+              const resp = await fetch('/api/strategy-metrics');
+              const d = await resp.json();
+              const el = document.getElementById('strat-metrics');
+              el.innerHTML = `
+                <div class="pill"><div class="label">Win Rate</div><div class="value">${{d.win_rate}}%</div></div>
+                <div class="pill"><div class="label">Avg Win</div><div class="value" style="color:#6ee7b7">${{d.average_win}} SOL</div></div>
+                <div class="pill"><div class="label">Avg Loss</div><div class="value" style="color:#f87171">${{d.average_loss}} SOL</div></div>
+                <div class="pill"><div class="label">Profit Factor</div><div class="value">${{d.profit_factor}}</div></div>
+                <div class="pill"><div class="label">Total PnL</div><div class="value" style="color:${{d.total_pnl >= 0 ? '#6ee7b7' : '#f87171'}}">${{d.total_pnl}} SOL</div></div>
+                <div class="pill"><div class="label">Largest Win</div><div class="value" style="color:#6ee7b7">${{d.largest_win}} SOL</div></div>
+                <div class="pill"><div class="label">Largest Loss</div><div class="value" style="color:#f87171">${{d.largest_loss}} SOL</div></div>
+              `;
+            }} catch(e) {{ console.error('Strategy metrics error', e); }}
+          }}
+          refreshStratMetrics();
+          setInterval(refreshStratMetrics, 15000);
+
+          // v2: Live System Metrics
+          async function refreshLiveMetrics() {{
+            try {{
+              const resp = await fetch('/api/live-metrics');
+              const d = await resp.json();
+              const el = document.getElementById('live-metrics');
+              el.innerHTML = `
+                <div class="pill"><div class="label">Tokens Scanned</div><div class="value">${{d.tokens_scanned}}</div></div>
+                <div class="pill"><div class="label">Tokens Rejected</div><div class="value">${{d.tokens_rejected}}</div></div>
+                <div class="pill"><div class="label">Smart Wallets</div><div class="value">${{d.smart_wallets_detected}}</div></div>
+                <div class="pill"><div class="label">Active Positions</div><div class="value">${{d.active_positions}}</div></div>
+              `;
+            }} catch(e) {{ console.error('Live metrics error', e); }}
+          }}
+          refreshLiveMetrics();
+          setInterval(refreshLiveMetrics, 15000);
+
+          // v2: Wallet Intelligence
+          async function refreshWalletIntel() {{
+            try {{
+              const resp = await fetch('/api/wallet-intelligence');
+              const d = await resp.json();
+              const el = document.getElementById('wallet-intel');
+              el.innerHTML = `
+                <div class="pill"><div class="label">Smart Wallets Tracked</div><div class="value">${{d.smart_wallets_tracked}}</div></div>
+                <div class="pill"><div class="label">Suspicious Wallets</div><div class="value" style="color:#f87171">${{d.suspicious_wallets}}</div></div>
+                <div class="pill"><div class="label">Wallet Signals</div><div class="value">${{d.wallet_driven_trade_signals}}</div></div>
+              `;
+            }} catch(e) {{ console.error('Wallet intel error', e); }}
+          }}
+          refreshWalletIntel();
+          setInterval(refreshWalletIntel, 15000);
         </script>
       </body>
     </html>
