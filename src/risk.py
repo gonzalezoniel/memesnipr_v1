@@ -74,36 +74,32 @@ def compute_position_size_sol(
     confidence_score: float,
     social_signal_score: float = 0.0,
 ) -> float:
-    balance = get_wallet_balance_sol(state.mode)
-    risk_pct = compute_risk_per_trade_pct(state)
+    """v2 Dynamic Position Sizing (Section 11).
 
-    # Confidence-proportional sizing: higher score → bigger position.
-    # Floor at 0.7x for lower-confidence entries, scale up to 1.2x for high.
-    # Tighter range than before to avoid oversizing on marginal signals.
-    conf_multiplier = 0.7 + 0.5 * min(confidence_score / 100.0, 1.0)
-    risk_pct *= conf_multiplier
+    Position size is determined by the confidence (final) score:
+        score > 80  -> POSITION_SIZE_HIGH_SOL (0.05 SOL)
+        score 70-80 -> POSITION_SIZE_MED_SOL  (0.03 SOL)
+        score 60-70 -> POSITION_SIZE_LOW_SOL  (0.015 SOL)
+        score < 60  -> 0 (skip trade)
+    """
+    if confidence_score >= 80:
+        size_sol = settings.POSITION_SIZE_HIGH_SOL
+    elif confidence_score >= 70:
+        size_sol = settings.POSITION_SIZE_MED_SOL
+    elif confidence_score >= 60:
+        size_sol = settings.POSITION_SIZE_LOW_SOL
+    else:
+        return 0.0  # skip trade
 
-    # Social signal boost: tokens with strong social buzz get up to +30%
-    # bigger positions.  social_signal_score ranges from 0.0 to 8.0.
-    if social_signal_score > 0:
-        social_boost = 1.0 + 0.30 * min(social_signal_score / settings.SOCIAL_SIGNAL_WEIGHT, 1.0)
-        risk_pct *= social_boost
-        logger.debug(
-            "Social signal boost: score={:.1f} multiplier={:.2f}",
-            social_signal_score, social_boost,
-        )
+    # Loss streak auto-throttle: halve size after streak
+    if state.loss_streak >= settings.LOSS_STREAK_HALVE_RISK:
+        size_sol *= 0.5
 
-    # Progressive daily-loss throttle: reduce position size as losses
-    # accumulate, even before the hard halt threshold.  Each loss
-    # beyond the first cuts size by 15%, compounding.
+    # Progressive daily-loss throttle
     if state.daily_losses > 0:
         loss_factor = max(0.3, 1.0 - (state.daily_losses * 0.15))
-        risk_pct *= loss_factor
+        size_sol *= loss_factor
 
-    # Hard cap: never risk more than 3.5% of wallet on a single position
-    risk_pct = min(risk_pct, 3.5)
-
-    size_sol = balance * (risk_pct / 100.0)
     return max(size_sol, 0.0001)  # ensure non-zero
 
 
@@ -113,6 +109,31 @@ def is_trading_halted(state: EngineState) -> bool:
     if state.halted_reason:
         return True
     return False
+
+
+def check_trade_frequency(state: EngineState, open_position_count: int) -> tuple[bool, str]:
+    """v2 Trade Frequency Controls (Section 10).
+
+    Returns (can_trade, reason) tuple.
+    """
+    # Max open positions
+    if open_position_count >= settings.MAX_OPEN_POSITIONS:
+        return False, f"max_open_positions ({settings.MAX_OPEN_POSITIONS}) reached"
+
+    # Max trades per hour
+    if state.hourly_trades >= settings.MAX_TRADES_PER_HOUR:
+        return False, f"max_trades_per_hour ({settings.MAX_TRADES_PER_HOUR}) reached"
+
+    # Cooldown after loss
+    if state.last_loss_at is not None:
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        elapsed = (now - state.last_loss_at).total_seconds()
+        if elapsed < settings.COOLDOWN_AFTER_LOSS_SECONDS:
+            remaining = settings.COOLDOWN_AFTER_LOSS_SECONDS - elapsed
+            return False, f"cooldown_after_loss ({remaining:.0f}s remaining)"
+
+    return True, ""
 
 
 def reset_daily_if_needed(state: EngineState, now: datetime | None = None) -> EngineState:

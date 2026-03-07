@@ -69,11 +69,38 @@ def evaluate_safety(token: TokenCandidate) -> SafetyResult:
         if not token.freeze_authority_revoked:
             _add_reason("FREEZE_AUTHORITY_ACTIVE", "Freeze authority not revoked")
 
-    # Liquidity
+    # Liquidity (v2: raised to $15k per Section 9)
     if token.liquidity_usd < settings.MIN_LIQUIDITY_USD:
         _add_reason(
             "LOW_LIQUIDITY",
             f"Liquidity too low: ${token.liquidity_usd:.0f} < ${settings.MIN_LIQUIDITY_USD:.0f}",
+        )
+
+    # v2 Section 9: top holder concentration (>12%)
+    if not _is_unknown_number(token.top_holder_pct) and token.top_holder_pct > settings.MAX_TOP_HOLDER_PCT:
+        _add_reason(
+            "HIGH_TOP_HOLDER_CONCENTRATION",
+            f"Top holder owns {token.top_holder_pct:.1f}% > {settings.MAX_TOP_HOLDER_PCT:.1f}%",
+        )
+
+    # v2 Section 9: contract age < 60 seconds
+    # Treat as a graduated soft penalty rather than a hard block.  Meme coins
+    # are often scanned within seconds of creation and a hard block here would
+    # prevent us from ever entering early.  The risk_score gate downstream
+    # will still reject tokens that accumulate too much risk.
+    # We only apply the penalty when the token's created_at comes from a
+    # historical source (baseline_volume > 0 or previous_liquidity > 0 hint
+    # at a multi-sample observation) — a token created_at equal to "now"
+    # simply means it was just discovered and the age is unreliable.
+    if age_seconds >= 1.0 and age_seconds < settings.MIN_CONTRACT_AGE_SECONDS:
+        freshness_penalty = 15.0 * (1.0 - age_seconds / settings.MIN_CONTRACT_AGE_SECONDS)
+        soft_risk += freshness_penalty
+
+    # v2 Section 9: top 3 wallets > 25% supply
+    if token.top_3_wallets_pct > settings.MAX_TOP_3_WALLETS_SUPPLY_PCT:
+        _add_reason(
+            "TOP_3_WALLETS_CONCENTRATION",
+            f"Top 3 wallets own {token.top_3_wallets_pct:.1f}% > {settings.MAX_TOP_3_WALLETS_SUPPLY_PCT:.1f}%",
         )
 
     # Taxes

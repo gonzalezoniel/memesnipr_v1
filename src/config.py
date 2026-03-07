@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     CHAIN: str = "solana"
 
     # Safety thresholds
-    MIN_LIQUIDITY_USD: float = 3_000
+    MIN_LIQUIDITY_USD: float = 15_000
     MAX_BUY_TAX_PCT: float = 12.0
     MAX_SELL_TAX_PCT: float = 12.0
     MAX_TOKEN_AGE_MINUTES: int = 45
@@ -49,14 +49,23 @@ class Settings(BaseSettings):
     LOSS_STREAK_HALVE_RISK: int = 3
     DAILY_MAX_LOSSES_HALT: int = 8
 
-    # Profit ladder & stops — tight stop, fast partials, protect winners
-    STOP_LOSS_PCT: float = 8.0
-    TP1_PCT: float = 12.0
-    TP1_SELL_PCT: float = 50.0
-    TP2_PCT: float = 40.0
+    # --- v2 Risk Management (Section 1) ---
+    SOFT_STOP_PCT: float = 4.0
+    MAX_STOP_PCT: float = 6.0
+
+    # --- v2 Breakeven Stop (Section 2) ---
+    BREAKEVEN_TRIGGER_PCT: float = 10.0
+
+    # Profit ladder & stops — v2 updated tiers
+    STOP_LOSS_PCT: float = 6.0
+    TP1_PCT: float = 15.0
+    TP1_SELL_PCT: float = 30.0
+    TP2_PCT: float = 25.0
     TP2_SELL_PCT: float = 30.0
-    TP3_PCT: float = 100.0
-    TRAILING_STOP_PCT: float = 6.0
+    TP3_PCT: float = 40.0
+    TP3_SELL_PCT: float = 20.0
+    TRAILING_STOP_PCT: float = 8.0
+    TRAILING_STOP_ACTIVATION_PCT: float = 20.0
     TRAILING_STOP_AFTER_TP1_PCT: float = 5.0
     TRAILING_STOP_AFTER_TP2_PCT: float = 4.0
 
@@ -72,19 +81,58 @@ class Settings(BaseSettings):
     MAX_NEW_POSITIONS_PER_SCAN: int = 3
     MIN_SECONDS_BETWEEN_TRADES: int = 10
 
+    # --- v2 Trade Frequency Controls (Section 10) ---
+    MAX_OPEN_POSITIONS: int = 3
+    MAX_TRADES_PER_HOUR: int = 6
+    COOLDOWN_AFTER_LOSS_SECONDS: int = 300
+
+    # --- v2 Dynamic Position Sizing (Section 11) ---
+    POSITION_SIZE_HIGH_SOL: float = 0.05
+    POSITION_SIZE_MED_SOL: float = 0.03
+    POSITION_SIZE_LOW_SOL: float = 0.015
+
     # Minimum quality filters for candidates
     MIN_BUY_RATIO: float = 0.55
     MIN_VOLUME_USD_5M: float = 1_000.0
     MIN_TRANSACTIONS_5M: int = 5
+
+    # --- v2 Momentum Confirmation (Section 3) ---
+    MOMENTUM_PRICE_CHANGE_1M_PCT: float = 4.0
+    MOMENTUM_VOLUME_SPIKE_MULTIPLIER: float = 2.5
+    MOMENTUM_LIQUIDITY_INCREASE_PCT: float = 10.0
 
     # Early-launch trap heuristics
     SUSPICIOUS_LAUNCH_WINDOW_SECONDS: int = 120
     SUSPICIOUS_MAX_TOP_HOLDER_PCT: float = 35.0
     SUSPICIOUS_MAX_HOLDER_COUNT: int = 50
 
-    # Social Signal Engine
+    # --- v2 Rug Pull Safety Filters (Section 9) ---
+    MAX_TOP_HOLDER_PCT: float = 12.0
+    MIN_CONTRACT_AGE_SECONDS: int = 60
+    MAX_TOP_3_WALLETS_SUPPLY_PCT: float = 25.0
+
+    # --- v2 Social Momentum Engine (Section 4) ---
     SOCIAL_SIGNAL_ENGINE_URL: str = "https://app-sgvdyzun.fly.dev"
-    SOCIAL_SIGNAL_WEIGHT: float = 8.0  # max score contribution from social signals
+    SOCIAL_SIGNAL_WEIGHT: float = 8.0
+    SMS_MIN_SCORE: int = 65
+    SMS_TWITTER_WEIGHT: float = 0.35
+    SMS_DEX_TRENDING_WEIGHT: float = 0.25
+    SMS_TELEGRAM_WEIGHT: float = 0.15
+    SMS_REDDIT_WEIGHT: float = 0.10
+    SMS_INFLUENCER_WALLET_WEIGHT: float = 0.15
+
+    # --- v2 Smart Wallet Tracking (Sections 5-7) ---
+    SMART_WALLET_MIN_SCORE: int = 70
+    SMART_WALLET_MIN_TRADES: int = 5
+    WALLET_DB_PATH: str = "data/wallet_db.json"
+
+    # --- v2 Updated Scoring Weights (Section 8) ---
+    SCORE_WEIGHT_LIQUIDITY: float = 0.25
+    SCORE_WEIGHT_MOMENTUM: float = 0.20
+    SCORE_WEIGHT_SOCIAL: float = 0.20
+    SCORE_WEIGHT_WALLET: float = 0.20
+    SCORE_WEIGHT_HOLDER: float = 0.10
+    SCORE_WEIGHT_AGE: float = 0.05
 
     # Storage paths
     ENGINE_STATE_PATH: str = "data/engine_state.json"
