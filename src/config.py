@@ -164,14 +164,58 @@ class Settings(BaseSettings):
     MIN_CONTRACT_AGE_SECONDS: int = 60
     MAX_TOP_3_WALLETS_SUPPLY_PCT: float = 25.0
 
-    # --- v2 Social Momentum Engine (Section 4) ---
+    # --- v2/v4 Social Momentum Engine ---
     SOCIAL_SIGNAL_ENGINE_URL: str = "https://app-sgvdyzun.fly.dev"
     SOCIAL_SIGNAL_WEIGHT: float = 8.0
     SMS_MIN_SCORE: int = 65
-    SMS_TWITTER_WEIGHT: float = 0.35
-    SMS_DEX_TRENDING_WEIGHT: float = 0.25
+
+    # v4 unified social momentum weights (Section 7)
+    SMS_TWITTER_WEIGHT: float = 0.30
+    SMS_DEX_TRENDING_WEIGHT: float = 0.20
+    SMS_BIRDEYE_WEIGHT: float = 0.15
     SMS_TELEGRAM_WEIGHT: float = 0.15
     SMS_REDDIT_WEIGHT: float = 0.10
+    SMS_WALLET_OVERLAP_WEIGHT: float = 0.10
+
+    # v4 Twitter signal settings (Section 1)
+    TWITTER_INFLUENCER_MIN_FOLLOWERS: int = 10_000
+    TWITTER_MENTION_VELOCITY_HIGH: float = 5.0  # mentions/min = high signal
+    TWITTER_ENGAGEMENT_RATE_HIGH: float = 0.03  # 3% engagement = high
+    TWITTER_SIGNAL_CACHE_TTL_SECONDS: int = 300
+
+    # v4 Telegram signal settings (Section 2)
+    TELEGRAM_VELOCITY_SPIKE_WINDOW_SECONDS: int = 300  # 5 min window
+    TELEGRAM_VELOCITY_SPIKE_MULTIPLIER: float = 3.0  # 3x spike = boost
+    TELEGRAM_SIGNAL_CACHE_TTL_SECONDS: int = 300
+
+    # v4 Birdeye settings (Section 4)
+    BIRDEYE_API_KEY: str = ""
+    BIRDEYE_API_URL: str = "https://public-api.birdeye.so"
+    BIRDEYE_SIGNAL_CACHE_TTL_SECONDS: int = 300
+
+    # v4 Pump platform settings (Section 5)
+    PUMP_MONITOR_ENABLED: bool = True
+    PUMP_EARLY_TRACTION_MIN_BUYERS: int = 10
+    PUMP_RAPID_GROWTH_THRESHOLD: float = 2.0  # 2x buyer growth in 5 min
+
+    # v4 Smart wallet social overlap (Section 6)
+    WALLET_SOCIAL_CONFIDENCE_BOOST: float = 15.0  # boost when both signals align
+
+    # v4 Social momentum event detection (Section 8)
+    SOCIAL_MOMENTUM_EVENT_WINDOW_SECONDS: int = 600  # 10 min window
+    SOCIAL_MOMENTUM_EVENT_MULTIPLIER: float = 3.0  # 3x increase = event
+    SOCIAL_MOMENTUM_EVENT_CONFIDENCE_BOOST: float = 12.0
+
+    # v4 Sentiment analysis (Section 9)
+    SENTIMENT_POSITIVE_WEIGHT: float = 1.0
+    SENTIMENT_NEGATIVE_WEIGHT: float = -2.0  # negatives weigh more
+
+    # v4 Spam filter (Section 10)
+    SPAM_MIN_ACCOUNT_AGE_DAYS: int = 7
+    SPAM_MIN_ENGAGEMENT_RATIO: float = 0.005  # 0.5% minimum engagement
+    SPAM_DUPLICATE_MESSAGE_THRESHOLD: int = 3  # flag after 3 identical msgs
+
+    # Legacy weight kept for backward compat
     SMS_INFLUENCER_WALLET_WEIGHT: float = 0.15
 
     # --- v2 Smart Wallet Tracking (Sections 5-7) ---

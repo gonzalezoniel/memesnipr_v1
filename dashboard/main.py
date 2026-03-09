@@ -10,7 +10,7 @@ from fastapi.responses import HTMLResponse
 from loguru import logger
 
 from src.engine import engine
-from src.social_signals import fetch_memecoin_signals, get_cached_signal_count, get_last_fetch_time
+from src.social_signals import fetch_memecoin_signals, get_cached_signal_count, get_last_fetch_time, get_social_intelligence_summary
 from src.storage import load_engine_state, load_recent_audit_records, load_recent_trades, summarize_audit_records
 
 
@@ -135,6 +135,12 @@ async def social_signals_endpoint():
         "cached_count": get_cached_signal_count(),
         "last_fetch": last_fetch.isoformat() if last_fetch else None,
     }
+
+
+@app.get("/api/social-intelligence")
+async def social_intelligence_endpoint():
+    """v4: Social intelligence summary across all signal sources."""
+    return get_social_intelligence_summary()
 
 
 @app.get("/")
@@ -317,6 +323,15 @@ async def root():
           <div class="card">
             <h2>Open Position Details (v3)</h2>
             <div id="pos-details"></div>
+          </div>
+
+          <!-- v4: Social Intelligence Overview Section (Section 11) -->
+          <div class="card">
+            <h2>Social Intelligence Overview</h2>
+            <p style="color:#9ca3af;font-size:0.85rem;margin-bottom:1rem;">
+              v4 multi-source social engine &mdash; Twitter, Telegram, DexScreener, Birdeye, Pump Platform, sentiment analysis, and spam filtering.
+            </p>
+            <div id="social-intel" class="grid"></div>
           </div>
 
           <div class="card">
@@ -534,6 +549,27 @@ async def root():
           }}
           refreshWalletIntel();
           setInterval(refreshWalletIntel, 15000);
+
+          // v4: Social Intelligence Overview
+          async function refreshSocialIntel() {{
+            try {{
+              const resp = await fetch('/api/social-intelligence');
+              const d = await resp.json();
+              const el = document.getElementById('social-intel');
+              el.innerHTML = `
+                <div class="pill"><div class="label">Signal Engine</div><div class="value" style="font-size:0.75rem;word-break:break-all">${{d.signal_engine_url || 'N/A'}}</div></div>
+                <div class="pill"><div class="label">Cached Signals</div><div class="value">${{d.cached_signals || 0}}</div></div>
+                <div class="pill"><div class="label">Twitter Signals</div><div class="value" style="color:#1d9bf0">${{d.twitter_signals_cached || 0}}</div></div>
+                <div class="pill"><div class="label">Telegram Signals</div><div class="value" style="color:#26a5e4">${{d.telegram_signals_cached || 0}}</div></div>
+                <div class="pill"><div class="label">Birdeye Signals</div><div class="value" style="color:#f59e0b">${{d.birdeye_signals_cached || 0}}</div></div>
+                <div class="pill"><div class="label">Pump Signals</div><div class="value" style="color:#a855f7">${{d.pump_signals_cached || 0}}</div></div>
+                <div class="pill"><div class="label">Spam Tokens Tracked</div><div class="value">${{d.spam_tokens_tracked || 0}}</div></div>
+                <div class="pill"><div class="label">Last Fetch</div><div class="value" style="font-size:0.75rem">${{d.last_fetch ? new Date(d.last_fetch).toLocaleTimeString() : 'Never'}}</div></div>
+              `;
+            }} catch(e) {{ console.error('Social intel error', e); }}
+          }}
+          refreshSocialIntel();
+          setInterval(refreshSocialIntel, 15000);
         </script>
       </body>
     </html>

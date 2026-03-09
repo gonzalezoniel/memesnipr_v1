@@ -177,3 +177,31 @@ def get_cached_signal_count() -> int:
 def get_last_fetch_time() -> Optional[datetime]:
     """Return the timestamp of the last successful fetch."""
     return _last_fetch
+
+
+def get_social_intelligence_summary() -> dict[str, Any]:
+    """
+    Get a comprehensive social intelligence summary for the dashboard.
+
+    v4: Includes data from all social signal sources (Twitter, Telegram,
+    Birdeye, Pump Platform, sentiment, spam filtering).
+    """
+    from .twitter_signals import get_twitter_cache_count
+    from .telegram_signals import get_telegram_cache_count
+    from .birdeye_signals import get_birdeye_cache_count
+    from .pump_monitor import get_pump_cache_count
+    from .spam_filter import get_spam_stats
+
+    spam_stats = get_spam_stats()
+
+    return {
+        "signal_engine_url": SIGNAL_ENGINE_URL,
+        "cached_signals": get_cached_signal_count(),
+        "last_fetch": _last_fetch.isoformat() if _last_fetch else None,
+        "twitter_signals_cached": get_twitter_cache_count(),
+        "telegram_signals_cached": get_telegram_cache_count(),
+        "birdeye_signals_cached": get_birdeye_cache_count(),
+        "pump_signals_cached": get_pump_cache_count(),
+        "spam_tokens_tracked": spam_stats.get("tokens_tracked", 0),
+        "spam_unique_messages": spam_stats.get("unique_messages_tracked", 0),
+    }

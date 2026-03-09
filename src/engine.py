@@ -321,30 +321,8 @@ class MemeSniprEngine:
             )
             return
 
-        # --- v3 Social Momentum Score (Section 6) ---
-        sms_result = compute_social_momentum_score(
-            symbol=token.symbol,
-            token_address=token.token_address,
-        )
-        scores["social_momentum_score"] = sms_result.sms_score
-
-        # v3: Social score gating (Section 6) - block if social_score < 3
-        # A score of 0.0 means "no social data available" (API returned nothing),
-        # which is different from a confirmed low social signal.  Only gate when
-        # the Social Signal Engine actually returned data (score > 0).
-        if sms_result.sms_score > 0.0 and sms_result.sms_score < settings.SOCIAL_BLOCK_BELOW:
-            self._tokens_rejected += 1
-            self._audit(
-                token,
-                reason_codes=["SOCIAL_SCORE_TOO_LOW"],
-                scores={"social_score": sms_result.sms_score},
-                thresholds={"social_block_below": settings.SOCIAL_BLOCK_BELOW},
-                decision="REJECT",
-                next_actions=["skip_token", "continue_scanning"],
-            )
-            return
-
         # --- v3 Wallet Analysis (Sections 5) ---
+        # Moved before SMS computation so wallet data can feed into social momentum scoring
         wallet_analysis = analyze_token_wallets(
             token_address=token.token_address,
             engine=self._wallet_engine,
@@ -370,6 +348,44 @@ class MemeSniprEngine:
                     "WALLET CLUSTER (2+) detected for {}: {} smart wallets, +12 confidence",
                     token.symbol, smart_count,
                 )
+
+        # --- v3/v4 Social Momentum Score (Section 6) ---
+        # v4: Pass additional data for Twitter, Telegram, Birdeye, Pump,
+        # sentiment, spam filtering, and wallet overlap integration
+        sms_result = compute_social_momentum_score(
+            symbol=token.symbol,
+            token_address=token.token_address,
+            wallet_accumulation_score=wallet_analysis.wallet_score_contribution
+            if wallet_analysis.accumulation_signal else 0.0,
+            dex_trending=bool(
+                token.liquidity_usd > settings.MIN_LIQUIDITY_USD * 2
+                and momentum_result.volume_spike_ratio > 1.5
+            ),
+            token_age_seconds=(now - token.created_at).total_seconds(),
+            holder_count=getattr(token, "holder_count", 0),
+            buys_5m=getattr(token, "buys_5m", 0),
+            sells_5m=getattr(token, "sells_5m", 0),
+            liquidity_usd=token.liquidity_usd,
+            previous_liquidity_usd=getattr(token, "previous_liquidity", 0.0) or 0.0,
+        )
+        scores["social_momentum_score"] = sms_result.sms_score
+        scores["social_score_unified"] = sms_result.social_score_unified
+
+        # v3: Social score gating (Section 6) - block if social_score < 3
+        # A score of 0.0 means "no social data available" (API returned nothing),
+        # which is different from a confirmed low social signal.  Only gate when
+        # the Social Signal Engine actually returned data (score > 0).
+        if sms_result.sms_score > 0.0 and sms_result.sms_score < settings.SOCIAL_BLOCK_BELOW:
+            self._tokens_rejected += 1
+            self._audit(
+                token,
+                reason_codes=["SOCIAL_SCORE_TOO_LOW"],
+                scores={"social_score": sms_result.sms_score},
+                thresholds={"social_block_below": settings.SOCIAL_BLOCK_BELOW},
+                decision="REJECT",
+                next_actions=["skip_token", "continue_scanning"],
+            )
+            return
 
         # --- v3 Updated Scoring (Section 8) ---
         liquidity_norm = min(token.liquidity_usd / (settings.MIN_LIQUIDITY_USD * 10), 1.0) * 100.0
@@ -402,6 +418,28 @@ class MemeSniprEngine:
 
         # v3: Wallet cluster confidence bonus (Section 5)
         final_score = min(final_score + wallet_cluster_confidence_bonus, 100.0)
+
+        # v4: Smart wallet + social overlap confidence boost (Section 6)
+        if (
+            wallet_analysis.wallet_score_contribution >= 50.0
+            and sms_result.sms_score >= 40.0
+        ):
+            wallet_social_boost = settings.WALLET_SOCIAL_CONFIDENCE_BOOST
+            final_score = min(final_score + wallet_social_boost, 100.0)
+            logger.info(
+                "WALLET-SOCIAL OVERLAP for {}: wallet={:.0f}, social={:.1f}, +{:.0f} confidence",
+                token.symbol, wallet_analysis.wallet_score_contribution,
+                sms_result.sms_score, wallet_social_boost,
+            )
+
+        # v4: Social momentum event confidence boost (Section 8)
+        if sms_result.is_momentum_event:
+            momentum_boost = settings.SOCIAL_MOMENTUM_EVENT_CONFIDENCE_BOOST
+            final_score = min(final_score + momentum_boost, 100.0)
+            logger.info(
+                "SOCIAL MOMENTUM EVENT for {}: {:.1f}x increase, +{:.0f} confidence",
+                token.symbol, sms_result.momentum_event_multiplier, momentum_boost,
+            )
 
         # v3: Trade memory setup adjustment (Section 11)
         setup_type = self._trade_memory.classify_setup_type(
@@ -543,6 +581,10 @@ class MemeSniprEngine:
             entry_reasons.append("smart_wallet_accumulation_detected")
         if sms_result.sms_score >= settings.SMS_MIN_SCORE:
             entry_reasons.append("social_momentum_high")
+        if sms_result.is_momentum_event:
+            entry_reasons.append("social_momentum_event")
+        if sms_result.sentiment_result and sms_result.sentiment_result.sentiment_label == "positive":
+            entry_reasons.append("positive_sentiment")
         if momentum_result.liquidity_increase_pct > 0:
             entry_reasons.append("liquidity_increasing")
         if momentum_result.buy_sell_ratio > 1.5:
@@ -552,16 +594,20 @@ class MemeSniprEngine:
         if not entry_reasons:
             entry_reasons.append("score_threshold_met")
 
-        # v3: Structured performance logging (Section 12)
+        # v3/v4: Structured performance logging (Section 12)
         logger.info(
-            "ENTRY SIGNAL {}: score={:.1f} | social={:.1f} | wallet_cluster={} | "
-            "trap={:.1f} | phase={} | conditions={}/{} | size={:.6f} SOL | "
-            "setup={} | reasons={}",
+            "ENTRY SIGNAL {}: score={:.1f} | social={:.1f} (unified={:.1f}) | "
+            "wallet_cluster={} | trap={:.1f} | phase={} | conditions={}/{} | "
+            "size={:.6f} SOL | setup={} | momentum_event={} | "
+            "sentiment={} | reasons={}",
             token.symbol, effective_score, sms_result.sms_score,
+            sms_result.social_score_unified,
             wallet_cluster_signal, trap_result.trap_score,
             phase_result.phase_label, entry_conditions_met,
             settings.ENTRY_MIN_CONDITIONS, size_sol,
-            setup_type, ", ".join(entry_reasons),
+            setup_type, sms_result.is_momentum_event,
+            sms_result.sentiment_result.sentiment_label if sms_result.sentiment_result else "unknown",
+            ", ".join(entry_reasons),
         )
 
         await self._execute_order_pipeline(
