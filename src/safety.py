@@ -50,6 +50,25 @@ def evaluate_safety(token: TokenCandidate) -> SafetyResult:
     # without hard-blocking the token (safety.passed stays True).
     soft_risk: float = 0.0
 
+    # --- v3 Token Health Check (Section 4) ---
+    # Liquidity locked check — only penalise when the field was explicitly set
+    # to False (i.e. we confirmed on-chain that liquidity is NOT locked).
+    # A value of None means "unknown / not checked" and should not be penalised.
+    if token.liquidity_locked is False:
+        soft_risk += 10.0  # Penalty for confirmed unlocked liquidity
+
+    # Tax checks: buy_tax < 12%, sell_tax < 12%
+    if not _is_unknown_number(token.buy_tax_pct) and token.buy_tax_pct >= 12.0:
+        _add_reason(
+            "HIGH_BUY_TAX_V3",
+            f"Buy tax {token.buy_tax_pct:.1f}% >= 12% (v3 health check)",
+        )
+    if not _is_unknown_number(token.sell_tax_pct) and token.sell_tax_pct >= 12.0:
+        _add_reason(
+            "HIGH_SELL_TAX_V3",
+            f"Sell tax {token.sell_tax_pct:.1f}% >= 12% (v3 health check)",
+        )
+
     # Token age check — soft penalty, not hard block.
     # The DexScreener profiles/boosts endpoints routinely surface tokens
     # older than MAX_TOKEN_AGE_MINUTES.  A graduated risk penalty lets the

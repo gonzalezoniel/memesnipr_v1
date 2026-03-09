@@ -111,6 +111,18 @@ async def wallet_intelligence_endpoint():
     return get_wallet_intelligence_summary(wallet_engine)
 
 
+@app.get("/api/setup-profitability")
+async def setup_profitability_endpoint():
+    """v3: Setup profitability stats (Section 13)."""
+    return engine.get_setup_profitability()
+
+
+@app.get("/api/position-details")
+async def position_details_endpoint():
+    """v3: Open position details with v3 metrics (Section 13)."""
+    return engine.get_open_position_details()
+
+
 @app.get("/api/social-signals")
 async def social_signals_endpoint():
     """Fetch latest memecoin social signals from the centralized Signal Engine."""
@@ -292,6 +304,21 @@ async def root():
             <div id="wallet-intel" class="grid"></div>
           </div>
 
+          <!-- v3: Setup Profitability Section (Section 13) -->
+          <div class="card">
+            <h2>Setup Profitability Stats</h2>
+            <p style="color:#9ca3af;font-size:0.85rem;margin-bottom:1rem;">
+              Self-learning trade memory &mdash; tracks win rate, profit factor, and expectancy per setup type.
+            </p>
+            <div id="setup-stats"></div>
+          </div>
+
+          <!-- v3: Position Details Section (Section 13) -->
+          <div class="card">
+            <h2>Open Position Details (v3)</h2>
+            <div id="pos-details"></div>
+          </div>
+
           <div class="card">
             <h2>Social Signals Intelligence</h2>
             <p style="color:#9ca3af;font-size:0.85rem;margin-bottom:1rem;">
@@ -422,11 +449,75 @@ async def root():
                 <div class="pill"><div class="label">Tokens Rejected</div><div class="value">${{d.tokens_rejected}}</div></div>
                 <div class="pill"><div class="label">Smart Wallets</div><div class="value">${{d.smart_wallets_detected}}</div></div>
                 <div class="pill"><div class="label">Active Positions</div><div class="value">${{d.active_positions}}</div></div>
+                <div class="pill"><div class="label">Consec. Losses</div><div class="value" style="color:${{d.consecutive_losses > 2 ? '#f87171' : '#6ee7b7'}}">${{d.consecutive_losses || 0}}</div></div>
+                <div class="pill"><div class="label">Pause Until</div><div class="value" style="color:#fbbf24">${{d.pause_until || 'None'}}</div></div>
               `;
             }} catch(e) {{ console.error('Live metrics error', e); }}
           }}
           refreshLiveMetrics();
           setInterval(refreshLiveMetrics, 15000);
+
+          // v3: Setup Profitability
+          async function refreshSetupStats() {{
+            try {{
+              const resp = await fetch('/api/setup-profitability');
+              const data = await resp.json();
+              const el = document.getElementById('setup-stats');
+              if (!data.length) {{
+                el.innerHTML = '<div style="color:#6b7280;text-align:center;padding:1rem;">No setup data yet. Trades will be analyzed as they complete.</div>';
+                return;
+              }}
+              let html = '<table><thead><tr><th>Setup</th><th>Trades</th><th>Win Rate</th><th>PF</th><th>Expectancy</th><th>Avg Hold</th><th>Adj</th></tr></thead><tbody>';
+              data.forEach(s => {{
+                const wrColor = s.win_rate >= 50 ? '#6ee7b7' : '#f87171';
+                const pfColor = s.profit_factor >= 1.5 ? '#6ee7b7' : s.profit_factor >= 1.0 ? '#fbbf24' : '#f87171';
+                const adjColor = s.score_adjustment < 1.0 ? '#f87171' : s.score_adjustment > 1.0 ? '#6ee7b7' : '#e5e7eb';
+                html += `<tr>
+                  <td style="font-size:0.8rem;">${{s.setup_type}}</td>
+                  <td>${{s.trades}}</td>
+                  <td style="color:${{wrColor}}">${{s.win_rate}}%</td>
+                  <td style="color:${{pfColor}}">${{s.profit_factor}}</td>
+                  <td>${{s.expectancy}}</td>
+                  <td>${{s.avg_hold_min}}m</td>
+                  <td style="color:${{adjColor}}">${{s.score_adjustment}}x</td>
+                </tr>`;
+              }});
+              html += '</tbody></table>';
+              el.innerHTML = html;
+            }} catch(e) {{ console.error('Setup stats error', e); }}
+          }}
+          refreshSetupStats();
+          setInterval(refreshSetupStats, 15000);
+
+          // v3: Position Details
+          async function refreshPosDetails() {{
+            try {{
+              const resp = await fetch('/api/position-details');
+              const data = await resp.json();
+              const el = document.getElementById('pos-details');
+              if (!data.length) {{
+                el.innerHTML = '<div style="color:#6b7280;text-align:center;padding:1rem;">No open positions</div>';
+                return;
+              }}
+              let html = '<table><thead><tr><th>Symbol</th><th>Confidence</th><th>Phase</th><th>Trap</th><th>Cluster</th><th>Size</th><th>Setup</th></tr></thead><tbody>';
+              data.forEach(p => {{
+                const trapColor = p.trap_score > 40 ? '#f87171' : p.trap_score > 20 ? '#fbbf24' : '#6ee7b7';
+                html += `<tr>
+                  <td style="font-weight:600">${{p.symbol}}</td>
+                  <td>${{p.confidence.toFixed(1)}}</td>
+                  <td style="font-size:0.8rem;">${{p.launch_phase || '—'}}</td>
+                  <td style="color:${{trapColor}}">${{p.trap_score.toFixed(1)}}</td>
+                  <td>${{p.wallet_cluster ? 'Yes' : '—'}}</td>
+                  <td>${{p.size_sol.toFixed(6)}} (${{p.size_multiplier.toFixed(2)}}x)</td>
+                  <td style="font-size:0.8rem;">${{p.setup_type || '—'}}</td>
+                </tr>`;
+              }});
+              html += '</tbody></table>';
+              el.innerHTML = html;
+            }} catch(e) {{ console.error('Position details error', e); }}
+          }}
+          refreshPosDetails();
+          setInterval(refreshPosDetails, 15000);
 
           // v2: Wallet Intelligence
           async function refreshWalletIntel() {{
