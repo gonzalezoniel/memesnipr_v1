@@ -41,6 +41,9 @@ from .risk import (
     is_trading_halted,
     check_trade_frequency,
 )
+from .trap_detection import detect_trap
+from .phase_detection import detect_launch_phase, LaunchPhase
+from .trade_memory import get_trade_memory, TradeMemoryRecord
 
 
 class MemeSniprEngine:
@@ -75,6 +78,9 @@ class MemeSniprEngine:
 
         # v2: smart wallet engine
         self._wallet_engine = get_smart_wallet_engine()
+
+        # v3: trade memory system
+        self._trade_memory = get_trade_memory()
 
         # v2: tracking counters
         self._tokens_scanned: int = 0
@@ -251,7 +257,7 @@ class MemeSniprEngine:
             )
             return
 
-        # --- v2 Momentum Confirmation (Section 3) ---
+        # --- v3 Momentum Confirmation (Section 3) ---
         momentum_result = check_momentum(
             token=token,
             baseline_volume=token.baseline_volume,
@@ -279,21 +285,93 @@ class MemeSniprEngine:
         scores = self.scorer.score(token, features)
         score = scores.get("total", 0.0)
 
-        # --- v2 Social Momentum Score (Section 4) ---
+        # --- v3 Trap Detection (Section 7) ---
+        trap_result = detect_trap(token)
+        if trap_result.is_trap:
+            self._tokens_rejected += 1
+            self._audit(
+                token,
+                reason_codes=["TRAP_DETECTED"] + trap_result.signals,
+                scores={"trap_score": trap_result.trap_score},
+                thresholds={"trap_threshold": settings.TRAP_SCORE_THRESHOLD},
+                decision="REJECT",
+                next_actions=["skip_token", "continue_scanning"],
+            )
+            logger.warning(
+                "TRAP BLOCKED {}: trap_score={:.1f}, signals={}",
+                token.symbol, trap_result.trap_score, trap_result.signals,
+            )
+            return
+
+        # --- v3 Phase Detection (Section 8) ---
+        phase_result = detect_launch_phase(token, now)
+        if phase_result.should_avoid:
+            self._tokens_rejected += 1
+            self._audit(
+                token,
+                reason_codes=["PHASE_EXHAUSTION"] + phase_result.reasons,
+                scores={"phase_confidence": phase_result.confidence},
+                thresholds={},
+                decision="REJECT",
+                next_actions=["skip_token", "continue_scanning"],
+            )
+            logger.info(
+                "PHASE SKIP {}: phase={}, reasons={}",
+                token.symbol, phase_result.phase_label, phase_result.reasons,
+            )
+            return
+
+        # --- v3 Social Momentum Score (Section 6) ---
         sms_result = compute_social_momentum_score(
             symbol=token.symbol,
             token_address=token.token_address,
         )
         scores["social_momentum_score"] = sms_result.sms_score
 
-        # --- v2 Wallet Analysis (Sections 5-7) ---
+        # v3: Social score gating (Section 6) - block if social_score < 3
+        # A score of 0.0 means "no social data available" (API returned nothing),
+        # which is different from a confirmed low social signal.  Only gate when
+        # the Social Signal Engine actually returned data (score > 0).
+        if sms_result.sms_score > 0.0 and sms_result.sms_score < settings.SOCIAL_BLOCK_BELOW:
+            self._tokens_rejected += 1
+            self._audit(
+                token,
+                reason_codes=["SOCIAL_SCORE_TOO_LOW"],
+                scores={"social_score": sms_result.sms_score},
+                thresholds={"social_block_below": settings.SOCIAL_BLOCK_BELOW},
+                decision="REJECT",
+                next_actions=["skip_token", "continue_scanning"],
+            )
+            return
+
+        # --- v3 Wallet Analysis (Sections 5) ---
         wallet_analysis = analyze_token_wallets(
             token_address=token.token_address,
             engine=self._wallet_engine,
         )
         scores["wallet_accumulation_score"] = wallet_analysis.wallet_score_contribution
 
-        # --- v2 Updated Scoring (Section 8) ---
+        # v3: Wallet cluster detection (Section 5)
+        wallet_cluster_signal = False
+        wallet_cluster_confidence_bonus = 0.0
+        if wallet_analysis.accumulation_signal:
+            smart_count = wallet_analysis.accumulation_signal.smart_wallet_count
+            if smart_count >= 3:
+                wallet_cluster_signal = True
+                wallet_cluster_confidence_bonus = 18.0
+                logger.info(
+                    "WALLET CLUSTER (3+) detected for {}: {} smart wallets, +18 confidence, +30% size",
+                    token.symbol, smart_count,
+                )
+            elif smart_count >= 2:
+                wallet_cluster_signal = True
+                wallet_cluster_confidence_bonus = 12.0
+                logger.info(
+                    "WALLET CLUSTER (2+) detected for {}: {} smart wallets, +12 confidence",
+                    token.symbol, smart_count,
+                )
+
+        # --- v3 Updated Scoring (Section 8) ---
         liquidity_norm = min(token.liquidity_usd / (settings.MIN_LIQUIDITY_USD * 10), 1.0) * 100.0
         momentum_norm = min(
             (momentum_result.volume_spike_ratio / 5.0) * 50.0
@@ -316,11 +394,34 @@ class MemeSniprEngine:
         )
         final_score = min(max(final_score, 0.0), 100.0)
 
-        # Use the higher of legacy score and v2 final_score to avoid
-        # over-rejecting while new signals ramp up
+        # v3: Social confidence bonuses (Section 6)
+        if sms_result.sms_score >= 7.0:
+            final_score = min(final_score + settings.SOCIAL_CONFIDENCE_BOOST_7, 100.0)
+        elif sms_result.sms_score >= 6.0:
+            final_score = min(final_score + settings.SOCIAL_CONFIDENCE_BOOST_6, 100.0)
+
+        # v3: Wallet cluster confidence bonus (Section 5)
+        final_score = min(final_score + wallet_cluster_confidence_bonus, 100.0)
+
+        # v3: Trade memory setup adjustment (Section 11)
+        setup_type = self._trade_memory.classify_setup_type(
+            social_score=sms_result.sms_score,
+            wallet_cluster=wallet_cluster_signal,
+            launch_phase=phase_result.phase.value,
+            momentum_score=momentum_norm,
+        )
+        memory_adjustment = self._trade_memory.get_setup_adjustment(setup_type)
+        final_score *= memory_adjustment
+        final_score = min(max(final_score, 0.0), 100.0)
+
+        # Use the higher of legacy score and v3 final_score
         effective_score = max(score, final_score)
         scores["final_score"] = final_score
         scores["effective_score"] = effective_score
+        scores["trap_score"] = trap_result.trap_score
+        scores["phase"] = phase_result.confidence
+        scores["wallet_cluster_bonus"] = wallet_cluster_confidence_bonus
+        scores["memory_adjustment"] = memory_adjustment
 
         thresholds = {
             "min_score_to_trade": float(settings.MIN_SCORE_TO_TRADE),
@@ -355,6 +456,33 @@ class MemeSniprEngine:
             )
             return
 
+        # --- v3 Entry Quality Filter (Section 2) ---
+        # Require minimum score AND at least 2 of 5 conditions
+        entry_conditions_met = 0
+        entry_condition_details: list[str] = []
+
+        if sms_result.sms_score >= settings.ENTRY_SOCIAL_SCORE_MIN:
+            entry_conditions_met += 1
+            entry_condition_details.append(f"social_score={sms_result.sms_score:.1f}>=5")
+        if momentum_result.volume_spike_ratio >= settings.ENTRY_VOLUME_SPIKE_MIN:
+            entry_conditions_met += 1
+            entry_condition_details.append(f"volume_spike={momentum_result.volume_spike_ratio:.1f}x>=2x")
+        elif momentum_result.buy_sell_ratio >= 2.0:
+            # Strong buying pressure (2x+ buyers vs sellers) serves as volume
+            # quality confirmation when no historical baseline is available.
+            entry_conditions_met += 1
+            entry_condition_details.append(f"buy_sell_ratio={momentum_result.buy_sell_ratio:.1f}x>=2x")
+        if token.liquidity_usd >= settings.ENTRY_LIQUIDITY_MIN_USD:
+            entry_conditions_met += 1
+            entry_condition_details.append(f"liquidity=${token.liquidity_usd:.0f}>=$25k")
+        if wallet_cluster_signal:
+            entry_conditions_met += 1
+            entry_condition_details.append("wallet_cluster_detected")
+        # Trending token signal (use social momentum as proxy)
+        if sms_result.sms_score >= 6.0:
+            entry_conditions_met += 1
+            entry_condition_details.append("trending_token")
+
         if effective_score < settings.MIN_SCORE_TO_TRADE:
             self._tokens_rejected += 1
             self._audit(
@@ -367,9 +495,32 @@ class MemeSniprEngine:
             )
             return
 
-        # --- v2 Dynamic Position Sizing (Section 11) ---
+        if entry_conditions_met < settings.ENTRY_MIN_CONDITIONS:
+            self._tokens_rejected += 1
+            self._audit(
+                token,
+                reason_codes=["ENTRY_QUALITY_FILTER_FAILED"],
+                scores={**scores, "entry_conditions_met": float(entry_conditions_met)},
+                thresholds={"min_conditions": float(settings.ENTRY_MIN_CONDITIONS)},
+                decision="REJECT",
+                next_actions=["skip_token", "continue_scanning"],
+            )
+            logger.debug(
+                "Entry quality filter rejected {}: {}/{} conditions met ({})",
+                token.symbol, entry_conditions_met, settings.ENTRY_MIN_CONDITIONS,
+                ", ".join(entry_condition_details),
+            )
+            return
+
+        # --- v3 Adaptive Position Sizing (Section 9) ---
         size_sol = compute_position_size_sol(
-            self.state, effective_score,
+            self.state,
+            effective_score,
+            social_signal_score=sms_result.sms_score,
+            wallet_cluster_signal=wallet_cluster_signal,
+            liquidity_usd=token.liquidity_usd,
+            phase_multiplier=phase_result.size_multiplier,
+            trap_score=trap_result.trap_score,
         )
 
         if size_sol <= 0:
@@ -384,9 +535,11 @@ class MemeSniprEngine:
             )
             return
 
-        # --- v2 Build entry reasons (Section 14) ---
+        # --- v3 Build entry reasons (Section 12/14) ---
         entry_reasons: list[str] = []
-        if wallet_analysis.accumulation_signal and wallet_analysis.accumulation_signal.smart_wallet_count > 0:
+        if wallet_cluster_signal:
+            entry_reasons.append("wallet_cluster_detected")
+        elif wallet_analysis.accumulation_signal and wallet_analysis.accumulation_signal.smart_wallet_count > 0:
             entry_reasons.append("smart_wallet_accumulation_detected")
         if sms_result.sms_score >= settings.SMS_MIN_SCORE:
             entry_reasons.append("social_momentum_high")
@@ -394,14 +547,22 @@ class MemeSniprEngine:
             entry_reasons.append("liquidity_increasing")
         if momentum_result.buy_sell_ratio > 1.5:
             entry_reasons.append("strong_buy_pressure")
+        if phase_result.phase == LaunchPhase.FIRST_PULLBACK:
+            entry_reasons.append("first_pullback_entry")
         if not entry_reasons:
             entry_reasons.append("score_threshold_met")
 
-        if sms_result.sms_score > 0:
-            logger.info(
-                "Social momentum for {}: SMS={:.1f} (total={:.1f})",
-                token.symbol, sms_result.sms_score, effective_score,
-            )
+        # v3: Structured performance logging (Section 12)
+        logger.info(
+            "ENTRY SIGNAL {}: score={:.1f} | social={:.1f} | wallet_cluster={} | "
+            "trap={:.1f} | phase={} | conditions={}/{} | size={:.6f} SOL | "
+            "setup={} | reasons={}",
+            token.symbol, effective_score, sms_result.sms_score,
+            wallet_cluster_signal, trap_result.trap_score,
+            phase_result.phase_label, entry_conditions_met,
+            settings.ENTRY_MIN_CONDITIONS, size_sol,
+            setup_type, ", ".join(entry_reasons),
+        )
 
         await self._execute_order_pipeline(
             OrderRequest(token=token, side="BUY", size_sol=size_sol, score=effective_score),
@@ -411,6 +572,11 @@ class MemeSniprEngine:
             social_score=sms_result.sms_score,
             wallet_score=wallet_analysis.wallet_score_contribution,
             momentum_score_val=momentum_norm,
+            trap_score=trap_result.trap_score,
+            launch_phase=phase_result.phase.value,
+            wallet_cluster_signal=wallet_cluster_signal,
+            setup_type=setup_type,
+            adaptive_size_multiplier=phase_result.size_multiplier,
         )
 
     async def _execute_order_pipeline(
@@ -422,6 +588,11 @@ class MemeSniprEngine:
         social_score: float = 0.0,
         wallet_score: float = 0.0,
         momentum_score_val: float = 0.0,
+        trap_score: float = 0.0,
+        launch_phase: str = "",
+        wallet_cluster_signal: bool = False,
+        setup_type: str = "",
+        adaptive_size_multiplier: float = 1.0,
     ):
         open_positions_size_sol = sum(
             p.size_sol for p in self.positions.values() if p.status == PositionStatus.OPEN
@@ -474,6 +645,11 @@ class MemeSniprEngine:
             wallet_score=wallet_score,
             momentum_score=momentum_score_val,
             entry_reasons=entry_reasons or [],
+            trap_score=trap_score,
+            launch_phase=launch_phase,
+            adaptive_size_multiplier=adaptive_size_multiplier,
+            wallet_cluster_signal=wallet_cluster_signal,
+            setup_type=setup_type,
         )
 
         self.state.daily_trades += 1
@@ -505,6 +681,10 @@ class MemeSniprEngine:
                 liquidity=order.token.liquidity_usd,
                 volume=order.token.volume_usd_5m,
                 entry_reason="; ".join(entry_reasons or []),
+                trap_score=trap_score,
+                launch_phase=launch_phase,
+                confidence_score=order.score,
+                setup_type=setup_type,
             )
         ])
 
@@ -605,14 +785,15 @@ class MemeSniprEngine:
                 self._close_position(pid, pos, current_price, pct_change, "STOP_LOSS", now)
                 continue
 
-            # --- v2 Trailing Stop (Section 2) ---
-            # Trailing activates after price exceeds +TRAILING_STOP_ACTIVATION_PCT
-            if pos.tp2_hit:
-                active_trailing_pct = settings.TRAILING_STOP_AFTER_TP2_PCT
-            elif pos.tp1_hit:
-                active_trailing_pct = settings.TRAILING_STOP_AFTER_TP1_PCT
-            elif pct_change >= settings.TRAILING_STOP_ACTIVATION_PCT:
-                active_trailing_pct = settings.TRAILING_STOP_PCT
+            # --- v3 Tiered Trailing Stop (Section 1) ---
+            # Trailing tightens at higher profit levels:
+            # +15% -> trail 8%, +30% -> trail 12%, +60% -> trail 18%
+            if pct_change >= settings.TRAILING_ACTIVATE_60_PCT:
+                active_trailing_pct = settings.TRAILING_STOP_AT_60_PCT
+            elif pct_change >= settings.TRAILING_ACTIVATE_30_PCT:
+                active_trailing_pct = settings.TRAILING_STOP_AT_30_PCT
+            elif pct_change >= settings.TRAILING_ACTIVATE_15_PCT:
+                active_trailing_pct = settings.TRAILING_STOP_AT_15_PCT
             else:
                 active_trailing_pct = None  # Trailing not yet active
 
@@ -721,11 +902,26 @@ class MemeSniprEngine:
         if pnl_sol >= 0:
             self.state.daily_wins += 1
             self.state.loss_streak = 0
+            self.state.consecutive_losses = 0  # v3: reset consecutive losses on win
         else:
             self.state.daily_losses += 1
             self.state.loss_streak += 1
+            self.state.consecutive_losses += 1  # v3: track consecutive losses
             self.state.last_loss_at = now
         self.state.daily_realized_pnl_sol += pnl_sol
+
+        # v3: Compute hold duration and excursions for trade memory
+        hold_duration_seconds = (now - pos.opened_at).total_seconds()
+        max_favorable = 0.0
+        max_adverse = 0.0
+        if pos.peak_price_usd > 0 and pos.entry_price_usd > 0:
+            max_favorable = (
+                (pos.peak_price_usd - pos.entry_price_usd) / pos.entry_price_usd
+            ) * 100.0
+        if pct_change < 0:
+            max_adverse = abs(pct_change)
+
+        token_age_seconds = (now - pos.token.created_at).total_seconds()
 
         self.persistence.append_trades([TradeLogEntry(
             id=str(uuid.uuid4()),
@@ -744,16 +940,63 @@ class MemeSniprEngine:
             momentum_score=pos.momentum_score,
             liquidity=pos.token.liquidity_usd,
             volume=pos.token.volume_usd_5m,
+            # v3: structured logging fields
+            trap_score=pos.trap_score,
+            launch_phase=pos.launch_phase,
+            confidence_score=pos.confidence_score,
+            setup_type=pos.setup_type,
+            max_favorable_excursion=max_favorable,
+            max_adverse_excursion=max_adverse,
+            hold_duration_seconds=hold_duration_seconds,
+            token_age_seconds=token_age_seconds,
         )])
 
-        logger.success(
-            "CLOSE {} | {} | pct={:+.1f}% | pnl={:+.6f} SOL",
+        # v3: Record trade in memory system (Section 11)
+        try:
+            self._trade_memory.record_trade(TradeMemoryRecord(
+                token_name=pos.token.symbol,
+                token_address=pos.token.token_address,
+                entry_score=pos.confidence_score,
+                social_score=pos.social_score,
+                wallet_cluster_signals=pos.wallet_cluster_signal,
+                wallet_score=pos.wallet_score,
+                liquidity=pos.token.liquidity_usd,
+                token_age_seconds=token_age_seconds,
+                launch_phase=pos.launch_phase,
+                entry_price=pos.entry_price_usd,
+                exit_price=current_price,
+                exit_reason=exit_reason,
+                max_favorable_excursion=max_favorable,
+                max_adverse_excursion=max_adverse,
+                hold_duration_seconds=hold_duration_seconds,
+                pnl_pct=pct_change,
+                pnl_sol=pnl_sol,
+                setup_type=pos.setup_type,
+                trap_score=pos.trap_score,
+                momentum_score=pos.momentum_score,
+            ))
+        except Exception as exc:
+            logger.warning("Failed to record trade in memory: {}", exc)
+
+        # v3: Structured exit logging (Section 12)
+        logger.info(
+            "EXIT {} | {} | pct={:+.1f}% | pnl={:+.6f} SOL | "
+            "phase={} | trap={:.1f} | setup={} | hold={:.0f}s | "
+            "MFE={:.1f}% | MAE={:.1f}%",
             pos.token.symbol, exit_reason, pct_change, pnl_sol,
+            pos.launch_phase, pos.trap_score, pos.setup_type,
+            hold_duration_seconds, max_favorable, max_adverse,
         )
 
         # v2: save wallet engine data periodically
         try:
             self._wallet_engine.save_db()
+        except Exception:
+            pass
+
+        # v3: save trade memory periodically
+        try:
+            self._trade_memory.save_db()
         except Exception:
             pass
 
@@ -824,7 +1067,40 @@ class MemeSniprEngine:
             "smart_wallets_detected": wallet_stats["smart_wallets"],
             "social_trending_tokens": 0,
             "active_positions": open_positions,
+            # v3: additional metrics
+            "consecutive_losses": self.state.consecutive_losses,
+            "pause_until": str(self.state.pause_until) if self.state.pause_until else None,
         }
+
+    def get_setup_profitability(self) -> list[dict]:
+        """Get setup profitability stats for dashboard (Section 13)."""
+        return self._trade_memory.get_setup_profitability_summary()
+
+    def get_open_position_details(self) -> list[dict]:
+        """Get detailed info on open positions for dashboard."""
+        details = []
+        for pid, pos in self.positions.items():
+            if pos.status != PositionStatus.OPEN:
+                continue
+            details.append({
+                "id": pid,
+                "symbol": pos.token.symbol,
+                "entry_price": pos.entry_price_usd,
+                "confidence": pos.confidence_score,
+                "social_score": pos.social_score,
+                "trap_score": pos.trap_score,
+                "launch_phase": pos.launch_phase,
+                "setup_type": pos.setup_type,
+                "wallet_cluster": pos.wallet_cluster_signal,
+                "size_multiplier": pos.adaptive_size_multiplier,
+                "size_sol": pos.size_sol,
+                "remaining_pct": pos.remaining_size_pct,
+                "tp1_hit": pos.tp1_hit,
+                "tp2_hit": pos.tp2_hit,
+                "tp3_hit": pos.tp3_hit,
+                "opened_at": str(pos.opened_at),
+            })
+        return details
 
 
 engine = MemeSniprEngine()

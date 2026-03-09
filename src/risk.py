@@ -73,23 +73,58 @@ def compute_position_size_sol(
     state: EngineState,
     confidence_score: float,
     social_signal_score: float = 0.0,
+    wallet_cluster_signal: bool = False,
+    liquidity_usd: float = 0.0,
+    phase_multiplier: float = 1.0,
+    trap_score: float = 0.0,
 ) -> float:
-    """v2 Dynamic Position Sizing (Section 11).
+    """v3 Adaptive Position Sizing (Section 9).
 
-    Position size is determined by the confidence (final) score:
-        score > 80  -> POSITION_SIZE_HIGH_SOL (0.05 SOL)
-        score 70-80 -> POSITION_SIZE_MED_SOL  (0.03 SOL)
-        score 60-70 -> POSITION_SIZE_LOW_SOL  (0.015 SOL)
-        score < 60  -> 0 (skip trade)
+    Position size adapts based on:
+    - confidence score (technical + social + wallet)
+    - social signal strength
+    - wallet cluster signals
+    - liquidity depth
+    - token lifecycle phase (via phase_multiplier)
+    - current drawdown / recent performance
+    - trap score (reduce size for suspicious tokens)
+
+    Strong signals -> 1.4x base size
+    Moderate signals -> 0.8x size
+    Weak signals -> 0.35x size
     """
-    if confidence_score >= 80:
-        size_sol = settings.POSITION_SIZE_HIGH_SOL
-    elif confidence_score >= 70:
-        size_sol = settings.POSITION_SIZE_MED_SOL
-    elif confidence_score >= 60:
-        size_sol = settings.POSITION_SIZE_LOW_SOL
-    else:
+    if confidence_score < settings.MIN_SCORE_TO_TRADE:
         return 0.0  # skip trade
+
+    base_sol = settings.POSITION_SIZE_BASE_SOL
+
+    # Determine signal strength multiplier
+    if confidence_score >= 85:
+        signal_multiplier = settings.POSITION_SIZE_STRONG_MULTIPLIER
+    elif confidence_score >= 78:
+        signal_multiplier = settings.POSITION_SIZE_MODERATE_MULTIPLIER
+    else:
+        signal_multiplier = settings.POSITION_SIZE_WEAK_MULTIPLIER
+
+    # Wallet cluster boost
+    if wallet_cluster_signal:
+        signal_multiplier *= 1.3  # +30% for cluster signal
+
+    # Social signal boost
+    if social_signal_score >= 7.0:
+        signal_multiplier *= 1.15
+    elif social_signal_score >= 5.0:
+        signal_multiplier *= 1.05
+
+    # Apply phase multiplier
+    signal_multiplier *= phase_multiplier
+
+    # Reduce size for high trap scores
+    if trap_score > 30.0:
+        trap_reduction = max(0.5, 1.0 - (trap_score - 30.0) / 60.0)
+        signal_multiplier *= trap_reduction
+
+    size_sol = base_sol * signal_multiplier
 
     # Loss streak auto-throttle: halve size after streak
     if state.loss_streak >= settings.LOSS_STREAK_HALVE_RISK:
@@ -99,6 +134,21 @@ def compute_position_size_sol(
     if state.daily_losses > 0:
         loss_factor = max(0.3, 1.0 - (state.daily_losses * 0.15))
         size_sol *= loss_factor
+
+    # Consecutive loss throttle (v3)
+    if state.consecutive_losses >= 5:
+        size_sol *= 0.3
+    elif state.consecutive_losses >= 3:
+        size_sol *= 0.5
+
+    # Liquidity impact cap: never exceed safe liquidity impact
+    if liquidity_usd > 0:
+        max_size_by_liq = (
+            liquidity_usd * settings.POSITION_SIZE_MAX_LIQUIDITY_IMPACT_PCT / 100.0
+        )
+        # Convert USD limit to approximate SOL (rough: assume ~$150/SOL)
+        max_sol_by_liq = max_size_by_liq / 150.0
+        size_sol = min(size_sol, max_sol_by_liq)
 
     return max(size_sol, 0.0001)  # ensure non-zero
 
@@ -112,9 +162,13 @@ def is_trading_halted(state: EngineState) -> bool:
 
 
 def check_trade_frequency(state: EngineState, open_position_count: int) -> tuple[bool, str]:
-    """v2 Trade Frequency Controls (Section 10).
+    """v3 Trade Frequency Controls (Section 10).
 
     Returns (can_trade, reason) tuple.
+
+    Includes loss streak pause system:
+    - 3 consecutive losses -> pause 10 minutes
+    - 5 consecutive losses -> pause 30 minutes
     """
     # Max open positions
     if open_position_count >= settings.MAX_OPEN_POSITIONS:
@@ -124,10 +178,41 @@ def check_trade_frequency(state: EngineState, open_position_count: int) -> tuple
     if state.hourly_trades >= settings.MAX_TRADES_PER_HOUR:
         return False, f"max_trades_per_hour ({settings.MAX_TRADES_PER_HOUR}) reached"
 
+    now = datetime.now(timezone.utc)
+
+    # v3: Loss streak pause system (Section 10)
+    if state.pause_until is not None:
+        if now < state.pause_until:
+            remaining = (state.pause_until - now).total_seconds()
+            return False, f"loss_streak_pause ({remaining:.0f}s remaining)"
+        else:
+            # Pause expired, clear it
+            state.pause_until = None
+
+    # v3: Check consecutive losses and apply pauses
+    if state.consecutive_losses >= 5:
+        if state.last_loss_at is not None:
+            from datetime import timedelta
+            pause_end = state.last_loss_at + timedelta(
+                seconds=settings.LOSS_STREAK_PAUSE_5_SECONDS
+            )
+            if now < pause_end:
+                state.pause_until = pause_end
+                remaining = (pause_end - now).total_seconds()
+                return False, f"5_loss_streak_pause ({remaining:.0f}s remaining)"
+    elif state.consecutive_losses >= 3:
+        if state.last_loss_at is not None:
+            from datetime import timedelta
+            pause_end = state.last_loss_at + timedelta(
+                seconds=settings.LOSS_STREAK_PAUSE_3_SECONDS
+            )
+            if now < pause_end:
+                state.pause_until = pause_end
+                remaining = (pause_end - now).total_seconds()
+                return False, f"3_loss_streak_pause ({remaining:.0f}s remaining)"
+
     # Cooldown after loss
     if state.last_loss_at is not None:
-        from datetime import datetime, timezone
-        now = datetime.now(timezone.utc)
         elapsed = (now - state.last_loss_at).total_seconds()
         if elapsed < settings.COOLDOWN_AFTER_LOSS_SECONDS:
             remaining = settings.COOLDOWN_AFTER_LOSS_SECONDS - elapsed

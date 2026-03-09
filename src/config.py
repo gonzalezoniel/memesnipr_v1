@@ -49,30 +49,68 @@ class Settings(BaseSettings):
     LOSS_STREAK_HALVE_RISK: int = 3
     DAILY_MAX_LOSSES_HALT: int = 8
 
-    # --- v2 Risk Management (Section 1) ---
-    SOFT_STOP_PCT: float = 4.0
+    # --- v3 Risk Management (Section 1) ---
+    SOFT_STOP_PCT: float = 6.0
     MAX_STOP_PCT: float = 6.0
 
-    # --- v2 Breakeven Stop (Section 2) ---
-    BREAKEVEN_TRIGGER_PCT: float = 10.0
+    # --- v3 Breakeven & Trailing Stops (Section 1) ---
+    BREAKEVEN_TRIGGER_PCT: float = 8.0
+    TRAILING_ACTIVATE_15_PCT: float = 15.0
+    TRAILING_STOP_AT_15_PCT: float = 8.0
+    TRAILING_ACTIVATE_30_PCT: float = 30.0
+    TRAILING_STOP_AT_30_PCT: float = 12.0
+    TRAILING_ACTIVATE_60_PCT: float = 60.0
+    TRAILING_STOP_AT_60_PCT: float = 18.0
 
-    # Profit ladder & stops — v2 updated tiers
+    # Profit ladder & stops — v3 updated tiers
     STOP_LOSS_PCT: float = 6.0
-    TP1_PCT: float = 15.0
-    TP1_SELL_PCT: float = 30.0
-    TP2_PCT: float = 25.0
+    TP1_PCT: float = 20.0
+    TP1_SELL_PCT: float = 40.0
+    TP2_PCT: float = 40.0
     TP2_SELL_PCT: float = 30.0
-    TP3_PCT: float = 40.0
-    TP3_SELL_PCT: float = 20.0
+    TP3_PCT: float = 80.0
+    TP3_SELL_PCT: float = 30.0
     TRAILING_STOP_PCT: float = 8.0
-    TRAILING_STOP_ACTIVATION_PCT: float = 20.0
-    TRAILING_STOP_AFTER_TP1_PCT: float = 5.0
-    TRAILING_STOP_AFTER_TP2_PCT: float = 4.0
+    TRAILING_STOP_ACTIVATION_PCT: float = 15.0
+    TRAILING_STOP_AFTER_TP1_PCT: float = 8.0
+    TRAILING_STOP_AFTER_TP2_PCT: float = 12.0
 
-    # Confidence score thresholds — selective entry, quality over quantity
-    MIN_SCORE_TO_TRADE: int = 60
+    # Confidence score thresholds — v3: quality over quantity
+    MIN_SCORE_TO_TRADE: int = 72
     MAX_RISK_SCORE_TO_TRADE: int = 30
-    HIGH_CONFIDENCE_SCORE: int = 75
+    HIGH_CONFIDENCE_SCORE: int = 80
+
+    # --- v3 Entry Quality Filter (Section 2) ---
+    ENTRY_MIN_CONDITIONS: int = 2
+    ENTRY_SOCIAL_SCORE_MIN: float = 5.0
+    ENTRY_VOLUME_SPIKE_MIN: float = 2.0
+    ENTRY_LIQUIDITY_MIN_USD: float = 25_000.0
+
+    # --- v3 Social Signal Influence (Section 6) ---
+    SOCIAL_CONFIDENCE_BOOST_6: float = 10.0
+    SOCIAL_CONFIDENCE_BOOST_7: float = 18.0
+    SOCIAL_BLOCK_BELOW: float = 3.0
+
+    # --- v3 Trap Detection (Section 7) ---
+    TRAP_SCORE_THRESHOLD: float = 60.0
+    TRAP_WICK_WEIGHT: float = 0.15
+    TRAP_SINGLE_WALLET_WEIGHT: float = 0.20
+    TRAP_FAKE_VOLUME_WEIGHT: float = 0.20
+    TRAP_SHALLOW_LIQ_WEIGHT: float = 0.15
+    TRAP_SLIPPAGE_WEIGHT: float = 0.10
+    TRAP_SELL_PRESSURE_WEIGHT: float = 0.10
+    TRAP_CHURN_WEIGHT: float = 0.10
+
+    # --- v3 Phase Detection (Section 8) ---
+    PHASE_FRESH_MAX_AGE_SECONDS: int = 300
+    PHASE_EARLY_MAX_AGE_SECONDS: int = 1800
+    PHASE_PULLBACK_MAX_AGE_SECONDS: int = 7200
+    PHASE_SECONDARY_MAX_AGE_SECONDS: int = 28800
+    PHASE_FRESH_SIZE_MULTIPLIER: float = 0.5
+    PHASE_EARLY_SIZE_MULTIPLIER: float = 1.0
+    PHASE_PULLBACK_SIZE_MULTIPLIER: float = 1.2
+    PHASE_SECONDARY_SIZE_MULTIPLIER: float = 0.7
+    PHASE_EXHAUSTION_SIZE_MULTIPLIER: float = 0.0
 
     # Engine speed
     SCAN_INTERVAL_SECONDS: int = 5
@@ -81,24 +119,39 @@ class Settings(BaseSettings):
     MAX_NEW_POSITIONS_PER_SCAN: int = 3
     MIN_SECONDS_BETWEEN_TRADES: int = 10
 
-    # --- v2 Trade Frequency Controls (Section 10) ---
+    # --- v3 Trade Frequency Controls (Section 10) ---
     MAX_OPEN_POSITIONS: int = 3
     MAX_TRADES_PER_HOUR: int = 6
     COOLDOWN_AFTER_LOSS_SECONDS: int = 300
+    LOSS_STREAK_PAUSE_3_SECONDS: int = 600
+    LOSS_STREAK_PAUSE_5_SECONDS: int = 1800
 
-    # --- v2 Dynamic Position Sizing (Section 11) ---
+    # --- v3 Adaptive Position Sizing (Section 9) ---
+    POSITION_SIZE_BASE_SOL: float = 0.03
+    POSITION_SIZE_STRONG_MULTIPLIER: float = 1.4
+    POSITION_SIZE_MODERATE_MULTIPLIER: float = 0.8
+    POSITION_SIZE_WEAK_MULTIPLIER: float = 0.35
+    POSITION_SIZE_MAX_LIQUIDITY_IMPACT_PCT: float = 2.0
+
+    # Legacy sizing (kept for backward compat)
     POSITION_SIZE_HIGH_SOL: float = 0.05
     POSITION_SIZE_MED_SOL: float = 0.03
     POSITION_SIZE_LOW_SOL: float = 0.015
+
+    # --- v3 Trade Memory (Section 11) ---
+    TRADE_MEMORY_PATH: str = "data/trade_memory.json"
+    TRADE_MEMORY_MIN_TRADES_FOR_ADJUSTMENT: int = 10
+    TRADE_MEMORY_PENALTY_THRESHOLD_WIN_RATE: float = 35.0
+    TRADE_MEMORY_PENALTY_FACTOR: float = 0.7
 
     # Minimum quality filters for candidates
     MIN_BUY_RATIO: float = 0.55
     MIN_VOLUME_USD_5M: float = 1_000.0
     MIN_TRANSACTIONS_5M: int = 5
 
-    # --- v2 Momentum Confirmation (Section 3) ---
-    MOMENTUM_PRICE_CHANGE_1M_PCT: float = 4.0
-    MOMENTUM_VOLUME_SPIKE_MULTIPLIER: float = 2.5
+    # --- v3 Momentum Confirmation (Section 3) ---
+    MOMENTUM_PRICE_CHANGE_1M_PCT: float = 3.0
+    MOMENTUM_VOLUME_SPIKE_MULTIPLIER: float = 1.8
     MOMENTUM_LIQUIDITY_INCREASE_PCT: float = 10.0
 
     # Early-launch trap heuristics

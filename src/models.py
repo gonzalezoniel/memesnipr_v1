@@ -48,6 +48,17 @@ class TokenCandidate(BaseModel):
     baseline_volume: float = 0.0  # v2: baseline volume for spike detection
     previous_liquidity: float = 0.0  # v2: for liquidity increase detection
 
+    # v3: additional signals for trap detection and phase detection
+    # None = unknown/not checked; True = locked; False = explicitly unlocked
+    liquidity_locked: Optional[bool] = None
+    volume_1m: float = 0.0
+    volume_avg_5m: float = 0.0
+    wick_ratio: float = 0.0  # high/low vs open/close ratio
+    single_wallet_volume_pct: float = 0.0  # % of volume from single wallet
+    sell_pressure_after_pump: float = 0.0  # sell pressure indicator
+    holder_growth_rate: float = 0.0  # holders/minute growth
+    retracement_depth_pct: float = 0.0  # pullback depth from ATH
+
 
 class SafetyResult(BaseModel):
     passed: bool
@@ -71,6 +82,11 @@ class ConfidenceComponents(BaseModel):
     wallet_accumulation_score: float = 0.0
     token_age_score: float = 0.0
     holder_distribution_score: float = 0.0
+    # v3 components
+    trap_score: float = 0.0
+    phase_score: float = 0.0
+    wallet_cluster_score: float = 0.0
+    adaptive_size_multiplier: float = 1.0
 
     @property
     def total_score(self) -> float:
@@ -120,6 +136,12 @@ class Position(BaseModel):
     wallet_score: float = 0.0
     momentum_score: float = 0.0
     entry_reasons: list[str] = Field(default_factory=list)
+    # v3: additional tracking fields
+    trap_score: float = 0.0
+    launch_phase: str = ""
+    adaptive_size_multiplier: float = 1.0
+    wallet_cluster_signal: bool = False
+    setup_type: str = ""
 
 
 class TradeLogEntry(BaseModel):
@@ -142,6 +164,15 @@ class TradeLogEntry(BaseModel):
     volume: float = 0.0
     entry_reason: Optional[str] = None
     exit_reason: Optional[str] = None
+    # v3: additional structured logging fields
+    trap_score: float = 0.0
+    launch_phase: str = ""
+    confidence_score: float = 0.0
+    setup_type: str = ""
+    max_favorable_excursion: float = 0.0
+    max_adverse_excursion: float = 0.0
+    hold_duration_seconds: float = 0.0
+    token_age_seconds: float = 0.0
 
 
 class EngineState(BaseModel):
@@ -161,6 +192,9 @@ class EngineState(BaseModel):
     # v2: trade frequency tracking (Section 10)
     hourly_trades: int = 0
     last_loss_at: Optional[datetime] = None
+    # v3: consecutive loss tracking for pause system
+    consecutive_losses: int = 0
+    pause_until: Optional[datetime] = None
 
 
 class AuditRecord(BaseModel):
