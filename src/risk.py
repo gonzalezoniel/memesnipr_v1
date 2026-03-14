@@ -153,6 +153,62 @@ def compute_position_size_sol(
     return max(size_sol, 0.0001)  # ensure non-zero
 
 
+def compute_v5_position_size_sol(
+    state: EngineState,
+    v5_signal_score: float,
+    base_size_sol: float = 0.0,
+    liquidity_usd: float = 0.0,
+) -> float:
+    """v5 Dynamic Position Sizing based on signal score.
+
+    Score 5  -> base size (1.0x)
+    Score 6  -> 1.5x size
+    Score 7+ -> 2.0x size
+
+    Must also respect risk limits.
+    """
+    if v5_signal_score < settings.V5_SIGNAL_TRADE_THRESHOLD:
+        return 0.0
+
+    if base_size_sol <= 0:
+        base_size_sol = settings.POSITION_SIZE_BASE_SOL
+
+    # Apply v5 score-based multiplier
+    if v5_signal_score >= 7:
+        multiplier = settings.V5_POSITION_SIZE_SCORE_7_MULTIPLIER
+    elif v5_signal_score >= 6:
+        multiplier = settings.V5_POSITION_SIZE_SCORE_6_MULTIPLIER
+    else:
+        multiplier = settings.V5_POSITION_SIZE_SCORE_5_MULTIPLIER
+
+    size_sol = base_size_sol * multiplier
+
+    # Loss streak auto-throttle
+    if state.loss_streak >= settings.LOSS_STREAK_HALVE_RISK:
+        size_sol *= 0.5
+
+    # Progressive daily-loss throttle
+    if state.daily_losses > 0:
+        loss_factor = max(0.3, 1.0 - (state.daily_losses * 0.15))
+        size_sol *= loss_factor
+
+    # Consecutive loss throttle
+    if state.consecutive_losses >= 5:
+        size_sol *= 0.3
+    elif state.consecutive_losses >= 3:
+        size_sol *= 0.5
+
+    # Liquidity impact cap
+    if liquidity_usd > 0:
+        max_size_by_liq = (
+            liquidity_usd * settings.POSITION_SIZE_MAX_LIQUIDITY_IMPACT_PCT / 100.0
+        )
+        max_sol_by_liq = max_size_by_liq / 150.0
+        size_sol = min(size_sol, max_sol_by_liq)
+
+    return max(size_sol, 0.0001)
+
+
 def is_trading_halted(state: EngineState) -> bool:
     if state.daily_losses >= settings.DAILY_MAX_LOSSES_HALT:
         return True

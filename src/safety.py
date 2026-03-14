@@ -50,6 +50,35 @@ def evaluate_safety(token: TokenCandidate) -> SafetyResult:
     # without hard-blocking the token (safety.passed stays True).
     soft_risk: float = 0.0
 
+    # --- v5 Rug Protection Filters ---
+    # Reject if dev wallet owns >15% of supply
+    if token.dev_wallet_pct > settings.V5_RUG_DEV_WALLET_MAX_PCT:
+        _add_reason(
+            "V5_DEV_WALLET_CONCENTRATION",
+            f"Dev wallet owns {token.dev_wallet_pct:.1f}% > {settings.V5_RUG_DEV_WALLET_MAX_PCT:.1f}% limit",
+        )
+
+    # Reject if dev wallet sells within first 5 minutes
+    if token.dev_sold_early:
+        _add_reason(
+            "V5_DEV_EARLY_SELL",
+            f"Dev wallet sold within first {settings.V5_RUG_DEV_SELL_WINDOW_SECONDS}s",
+        )
+
+    # Reject if liquidity is confirmed unlockable
+    if settings.V5_RUG_REJECT_UNLOCKABLE_LIQ and token.liquidity_locked is False:
+        _add_reason(
+            "V5_LIQUIDITY_UNLOCKABLE",
+            "Liquidity is confirmed unlockable (rug risk)",
+        )
+
+    # Reject if liquidity < $40k (v5 floor)
+    if token.liquidity_usd < settings.V5_RUG_MIN_LIQUIDITY_USD:
+        _add_reason(
+            "V5_LOW_LIQUIDITY",
+            f"Liquidity ${token.liquidity_usd:.0f} < ${settings.V5_RUG_MIN_LIQUIDITY_USD:.0f} v5 floor",
+        )
+
     # --- v3 Token Health Check (Section 4) ---
     # Liquidity locked check — only penalise when the field was explicitly set
     # to False (i.e. we confirmed on-chain that liquidity is NOT locked).
@@ -146,6 +175,17 @@ def evaluate_safety(token: TokenCandidate) -> SafetyResult:
     # Known bad deployers
     if token.deployer_address and token.deployer_address in BAD_DEPLOYERS:
         _add_reason("BAD_DEPLOYER", "Deployer address flagged as bad")
+
+    # --- v5 Rug Protection: log all rejection reasons ---
+    v5_rejections = [
+        code for code in reason_codes
+        if code.startswith("V5_")
+    ]
+    if v5_rejections:
+        logger.warning(
+            "V5 RUG FILTER rejected {}: {}",
+            token.symbol, ", ".join(v5_rejections),
+        )
 
     # Base risk from hard-block reason codes + graduated soft penalties
     risk_score = min(float(len(reason_codes) * 20) + soft_risk, 100.0)

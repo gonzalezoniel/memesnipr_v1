@@ -164,6 +164,53 @@ class Settings(BaseSettings):
     MIN_CONTRACT_AGE_SECONDS: int = 60
     MAX_TOP_3_WALLETS_SUPPLY_PCT: float = 25.0
 
+    # --- v5 Rug Protection Filters ---
+    V5_RUG_DEV_WALLET_MAX_PCT: float = 15.0        # reject if dev owns >15%
+    V5_RUG_DEV_SELL_WINDOW_SECONDS: int = 300       # reject if dev sells within 5 min
+    V5_RUG_MIN_LIQUIDITY_USD: float = 40_000.0      # reject if liquidity < $40k
+    V5_RUG_REJECT_UNLOCKABLE_LIQ: bool = True       # reject if liquidity unlockable
+
+    # --- v5 Signal Scoring Engine ---
+    V5_SIGNAL_TRADE_THRESHOLD: int = 5
+    V5_SIGNAL_LARGE_POSITION_THRESHOLD: int = 7
+    V5_SIGNAL_RUNNER_MODE_THRESHOLD: int = 8
+
+    # --- v5 Dynamic Position Sizing ---
+    V5_POSITION_SIZE_SCORE_5_MULTIPLIER: float = 1.0
+    V5_POSITION_SIZE_SCORE_6_MULTIPLIER: float = 1.5
+    V5_POSITION_SIZE_SCORE_7_MULTIPLIER: float = 2.0
+
+    # --- v5 Runner Detection ---
+    V5_RUNNER_PRICE_INCREASE_PCT: float = 25.0
+    V5_RUNNER_TRAILING_STOP_PCT: float = 25.0
+    V5_RUNNER_MIN_VOLUME_MOMENTUM: float = 3.0
+
+    # --- v5 Smart Wallet Intelligence ---
+    V5_SMART_WALLET_MIN_TRADES: int = 10
+    V5_SMART_WALLET_MIN_WIN_RATE: float = 60.0
+    V5_SMART_WALLET_MIN_AVG_ROI: float = 2.0
+    V5_SMART_WALLET_MIN_PROFITABLE_TOKENS: int = 2
+    V5_CLUSTER_WINDOW_SECONDS: int = 120
+    V5_CLUSTER_MIN_WALLETS: int = 3
+
+    # --- v5 Liquidity Detector ---
+    V5_LIQUIDITY_SPIKE_THRESHOLD_PCT: float = 30.0
+    V5_LIQUIDITY_WINDOW_SECONDS: int = 300
+
+    # --- v5 Volume Detector ---
+    V5_VOLUME_SHORT_WINDOW_SECONDS: int = 180
+    V5_VOLUME_LONG_WINDOW_SECONDS: int = 900
+    V5_VOLUME_SPIKE_MULTIPLIER: float = 3.0
+
+    # --- v5 Holder Tracker ---
+    V5_HOLDER_GROWTH_THRESHOLD_PCT: float = 15.0
+    V5_HOLDER_WINDOW_SECONDS: int = 600
+
+    # --- v5 Performance Logging ---
+    V5_PERFORMANCE_LOG_PATH: str = "data/v5_performance_log.json"
+    V5_DYNAMIC_WEIGHT_ADJUSTMENT: bool = True
+    V5_MIN_TRADES_FOR_WEIGHT_ADJUST: int = 20
+
     # --- v2/v4 Social Momentum Engine ---
     SOCIAL_SIGNAL_ENGINE_URL: str = "https://app-sgvdyzun.fly.dev"
     SOCIAL_SIGNAL_WEIGHT: float = 8.0

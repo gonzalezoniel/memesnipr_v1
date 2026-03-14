@@ -44,6 +44,13 @@ from .risk import (
 from .trap_detection import detect_trap
 from .phase_detection import detect_launch_phase, LaunchPhase
 from .trade_memory import get_trade_memory, TradeMemoryRecord
+from .signal_scoring import get_signal_scoring_engine, SignalScoringEngine
+from .runner_detection import get_runner_detector, RunnerDetector
+from .smart_wallet_intelligence import get_smart_wallet_intelligence, SmartWalletIntelligence
+from .liquidity_detector import get_liquidity_detector, LiquidityDetector
+from .volume_detector import get_volume_detector, VolumeDetector
+from .holder_tracker import get_holder_tracker, HolderTracker
+from .risk import compute_v5_position_size_sol
 
 
 class MemeSniprEngine:
@@ -81,6 +88,14 @@ class MemeSniprEngine:
 
         # v3: trade memory system
         self._trade_memory = get_trade_memory()
+
+        # v5: new intelligence modules
+        self._signal_scoring = get_signal_scoring_engine()
+        self._runner_detector = get_runner_detector()
+        self._wallet_intelligence = get_smart_wallet_intelligence()
+        self._liquidity_detector = get_liquidity_detector()
+        self._volume_detector = get_volume_detector()
+        self._holder_tracker = get_holder_tracker()
 
         # v2: tracking counters
         self._tokens_scanned: int = 0
@@ -550,6 +565,45 @@ class MemeSniprEngine:
             )
             return
 
+        # --- v5 Signal Scoring Engine ---
+        # Feed all detector data into the v5 composite signal scoring engine
+        v5_scoring_result = self._signal_scoring.compute_score(
+            token_address=token.token_address,
+            wallet_intelligence=self._wallet_intelligence,
+            liquidity_detector=self._liquidity_detector,
+            volume_detector=self._volume_detector,
+            holder_tracker=self._holder_tracker,
+            social_score=sms_result.sms_score,
+        )
+        v5_signal_score = v5_scoring_result.total_score
+        v5_should_trade = v5_scoring_result.should_trade
+        v5_larger_position = v5_scoring_result.larger_position
+        v5_runner_mode = v5_scoring_result.runner_mode
+
+        scores["v5_signal_score"] = v5_signal_score
+        scores["v5_smart_wallet_cluster"] = v5_scoring_result.components.smart_wallet_cluster
+        scores["v5_volume_spike"] = v5_scoring_result.components.volume_spike
+        scores["v5_liquidity_injection"] = v5_scoring_result.components.liquidity_injection
+        scores["v5_holder_acceleration"] = v5_scoring_result.components.holder_acceleration
+        scores["v5_social_sentiment"] = v5_scoring_result.components.social_sentiment
+
+        if v5_should_trade:
+            logger.info(
+                "V5 SIGNAL SCORE {}: score={:.1f} | components={} | larger_pos={} | runner={}",
+                token.symbol, v5_signal_score,
+                v5_scoring_result.components.model_dump(),
+                v5_larger_position, v5_runner_mode,
+            )
+            # Update engine state counters
+            if v5_scoring_result.components.smart_wallet_cluster > 0:
+                self.state.v5_cluster_events += 1
+            if v5_scoring_result.components.volume_spike > 0:
+                self.state.v5_volume_spikes += 1
+            if v5_scoring_result.components.liquidity_injection > 0:
+                self.state.v5_liquidity_spikes += 1
+            if v5_scoring_result.components.holder_acceleration > 0:
+                self.state.v5_holder_momentum_events += 1
+
         # --- v3 Adaptive Position Sizing (Section 9) ---
         size_sol = compute_position_size_sol(
             self.state,
@@ -560,6 +614,21 @@ class MemeSniprEngine:
             phase_multiplier=phase_result.size_multiplier,
             trap_score=trap_result.trap_score,
         )
+
+        # --- v5 Dynamic Position Sizing: override with v5 sizing if signal score qualifies ---
+        if v5_should_trade:
+            v5_size_sol = compute_v5_position_size_sol(
+                state=self.state,
+                v5_signal_score=v5_signal_score,
+                base_size_sol=size_sol,
+                liquidity_usd=token.liquidity_usd,
+            )
+            if v5_size_sol > size_sol:
+                logger.info(
+                    "V5 POSITION SIZE UPGRADE {}: {:.6f} -> {:.6f} SOL (score={:.1f})",
+                    token.symbol, size_sol, v5_size_sol, v5_signal_score,
+                )
+                size_sol = v5_size_sol
 
         if size_sol <= 0:
             self._tokens_rejected += 1
@@ -594,6 +663,18 @@ class MemeSniprEngine:
         if not entry_reasons:
             entry_reasons.append("score_threshold_met")
 
+        # v5: Add v5 signal reasons
+        if v5_scoring_result.components.smart_wallet_cluster > 0:
+            entry_reasons.append("v5_smart_wallet_cluster")
+        if v5_scoring_result.components.volume_spike > 0:
+            entry_reasons.append("v5_volume_spike")
+        if v5_scoring_result.components.liquidity_injection > 0:
+            entry_reasons.append("v5_liquidity_injection")
+        if v5_scoring_result.components.holder_acceleration > 0:
+            entry_reasons.append("v5_holder_acceleration")
+        if v5_runner_mode:
+            entry_reasons.append("v5_runner_mode_enabled")
+
         # v3/v4: Structured performance logging (Section 12)
         logger.info(
             "ENTRY SIGNAL {}: score={:.1f} | social={:.1f} (unified={:.1f}) | "
@@ -623,6 +704,9 @@ class MemeSniprEngine:
             wallet_cluster_signal=wallet_cluster_signal,
             setup_type=setup_type,
             adaptive_size_multiplier=phase_result.size_multiplier,
+            v5_signal_score=v5_signal_score,
+            v5_signal_components=v5_scoring_result.components.model_dump(),
+            v5_runner_mode=v5_runner_mode,
         )
 
     async def _execute_order_pipeline(
@@ -639,6 +723,9 @@ class MemeSniprEngine:
         wallet_cluster_signal: bool = False,
         setup_type: str = "",
         adaptive_size_multiplier: float = 1.0,
+        v5_signal_score: float = 0.0,
+        v5_signal_components: dict[str, float] | None = None,
+        v5_runner_mode: bool = False,
     ):
         open_positions_size_sol = sum(
             p.size_sol for p in self.positions.values() if p.status == PositionStatus.OPEN
@@ -696,7 +783,15 @@ class MemeSniprEngine:
             adaptive_size_multiplier=adaptive_size_multiplier,
             wallet_cluster_signal=wallet_cluster_signal,
             setup_type=setup_type,
+            v5_signal_score=v5_signal_score,
+            v5_signal_components=v5_signal_components or {},
+            v5_runner_mode=v5_runner_mode,
+            v5_entry_reasons=[r for r in (entry_reasons or []) if r.startswith("v5_")],
         )
+
+        # v5: Track runner trades
+        if v5_runner_mode:
+            self.state.v5_runner_trades += 1
 
         self.state.daily_trades += 1
         self.state.hourly_trades += 1
@@ -790,6 +885,46 @@ class MemeSniprEngine:
                 pos.peak_price_usd = current_price
 
             pct_change = ((current_price - pos.entry_price_usd) / pos.entry_price_usd) * 100.0
+
+            # --- v5 Runner Detection Mode ---
+            # For positions flagged with v5_runner_mode, check runner conditions
+            # and override stop management when runner is confirmed
+            if pos.v5_runner_mode:
+                runner_state = self._runner_detector.evaluate(
+                    position_id=pid,
+                    token_address=pos.token.token_address,
+                    pct_change=pct_change,
+                    current_price=current_price,
+                    entry_price=pos.entry_price_usd,
+                    peak_price=pos.peak_price_usd,
+                    volume_detector=self._volume_detector,
+                    holder_tracker=self._holder_tracker,
+                    dev_sold=pos.token.dev_sold_early,
+                )
+                if runner_state is not None:
+                    pos.v5_trailing_stop_level = runner_state.trailing_stop_level
+                    if runner_state.is_runner:
+                        # Runner confirmed: use v5 trailing stop instead of normal stops
+                        if runner_state.check_trailing_stop_triggered(current_price):
+                            logger.success(
+                                "V5 RUNNER TRAILING STOP {} | pct={:+.1f}% | trail_level={:.4f}",
+                                pos.token.symbol, pct_change, runner_state.trailing_stop_level,
+                            )
+                            self._close_position(
+                                pid, pos, current_price, pct_change,
+                                "V5_RUNNER_TRAILING_STOP", now,
+                            )
+                            continue
+                        # Runner active: skip normal stop logic, let it run
+                        if not runner_state.stop_at_entry_active:
+                            # Move stop to entry (breakeven)
+                            pos.breakeven_stop_active = True
+                        logger.debug(
+                            "V5 RUNNER ACTIVE {} | pct={:+.1f}% | trail={:.4f}",
+                            pos.token.symbol, pct_change, runner_state.trailing_stop_level,
+                        )
+                        # Skip normal trailing stop logic for runners
+                        # Still check hard stops and take profits below
 
             # --- v2 Breakeven Stop (Section 1) ---
             # Activate breakeven stop when price reaches +BREAKEVEN_TRIGGER_PCT
