@@ -143,6 +143,95 @@ async def social_intelligence_endpoint():
     return get_social_intelligence_summary()
 
 
+@app.get("/api/v5/signal-scores")
+async def v5_signal_scores_endpoint():
+    """v5: Current signal scoring engine state."""
+    from src.signal_scoring import get_signal_scoring_engine
+    scoring = get_signal_scoring_engine()
+    return {
+        "recent_scores": scoring.get_recent_scores(),
+        "active_signals": scoring.get_active_signal_count(),
+    }
+
+
+@app.get("/api/v5/runner-detection")
+async def v5_runner_detection_endpoint():
+    """v5: Runner detection state for all open positions."""
+    from src.runner_detection import get_runner_detector
+    detector = get_runner_detector()
+    runners = []
+    for pid, pos in engine.positions.items():
+        if pos.status.value != "OPEN":
+            continue
+        state = detector.get_runner_state(pid)
+        runners.append({
+            "position_id": pid,
+            "symbol": pos.token.symbol,
+            "v5_runner_mode": pos.v5_runner_mode,
+            "is_runner": state.is_runner if state else False,
+            "trailing_stop_level": state.trailing_stop_level if state else 0.0,
+            "stop_at_entry": state.stop_at_entry_active if state else False,
+            "v5_signal_score": pos.v5_signal_score,
+        })
+    return runners
+
+
+@app.get("/api/v5/liquidity-spikes")
+async def v5_liquidity_spikes_endpoint():
+    """v5: Recent liquidity spike events."""
+    from src.liquidity_detector import get_liquidity_detector
+    detector = get_liquidity_detector()
+    return {
+        "spike_events": [e.model_dump(mode="json") for e in detector.get_recent_events()],
+        "tokens_monitored": detector.get_monitored_token_count(),
+    }
+
+
+@app.get("/api/v5/volume-acceleration")
+async def v5_volume_acceleration_endpoint():
+    """v5: Recent volume acceleration events."""
+    from src.volume_detector import get_volume_detector
+    detector = get_volume_detector()
+    return {
+        "spike_events": [e.model_dump(mode="json") for e in detector.get_recent_events()],
+        "tokens_monitored": detector.get_monitored_token_count(),
+    }
+
+
+@app.get("/api/v5/holder-growth")
+async def v5_holder_growth_endpoint():
+    """v5: Recent holder growth momentum events."""
+    from src.holder_tracker import get_holder_tracker
+    tracker = get_holder_tracker()
+    return {
+        "momentum_events": [e.model_dump(mode="json") for e in tracker.get_recent_events()],
+        "tokens_monitored": tracker.get_monitored_token_count(),
+    }
+
+
+@app.get("/api/v5/smart-wallet-clusters")
+async def v5_smart_wallet_clusters_endpoint():
+    """v5: Smart wallet cluster events and tracked wallets."""
+    from src.smart_wallet_intelligence import get_smart_wallet_intelligence
+    intel = get_smart_wallet_intelligence()
+    return {
+        "wallets_tracked": intel.get_tracked_wallet_count(),
+        "cluster_events": [e.model_dump(mode="json") for e in intel.get_recent_cluster_events()],
+        "recent_signals": intel.get_signal_count(),
+    }
+
+
+@app.get("/api/v5/signal-performance")
+async def v5_signal_performance_endpoint():
+    """v5: Per-signal performance stats and dynamic weights."""
+    from src.trade_memory import get_trade_memory
+    memory = get_trade_memory()
+    return {
+        "signal_performance": memory.get_v5_signal_performance(),
+        "current_weights": memory.get_v5_signal_weights().model_dump(),
+    }
+
+
 @app.get("/")
 async def root():
     state = load_engine_state()
@@ -323,6 +412,33 @@ async def root():
           <div class="card">
             <h2>Open Position Details (v3)</h2>
             <div id="pos-details"></div>
+          </div>
+
+          <!-- v5: Signal Scoring & Runner Detection Section -->
+          <div class="card">
+            <h2>v5 Signal Intelligence</h2>
+            <p style="color:#9ca3af;font-size:0.85rem;margin-bottom:1rem;">
+              Composite signal scoring, runner detection, smart wallet clusters, volume/liquidity/holder momentum.
+            </p>
+            <div id="v5-signals" class="grid"></div>
+          </div>
+
+          <!-- v5: Runner Mode Trades -->
+          <div class="card">
+            <h2>v5 Runner Detection</h2>
+            <p style="color:#9ca3af;font-size:0.85rem;margin-bottom:1rem;">
+              Positions in runner mode with trailing stops. Runners are held until trailing stop triggers.
+            </p>
+            <div id="v5-runners"></div>
+          </div>
+
+          <!-- v5: Signal Performance & Dynamic Weights -->
+          <div class="card">
+            <h2>v5 Signal Performance</h2>
+            <p style="color:#9ca3af;font-size:0.85rem;margin-bottom:1rem;">
+              Per-signal win rate, profit factor, and dynamically adjusted weights.
+            </p>
+            <div id="v5-perf"></div>
           </div>
 
           <!-- v4: Social Intelligence Overview Section (Section 11) -->
@@ -549,6 +665,102 @@ async def root():
           }}
           refreshWalletIntel();
           setInterval(refreshWalletIntel, 15000);
+
+          // v5: Signal Intelligence
+          async function refreshV5Signals() {{
+            try {{
+              const [scoresResp, clustersResp, liqResp, volResp, holderResp] = await Promise.all([
+                fetch('/api/v5/signal-scores'),
+                fetch('/api/v5/smart-wallet-clusters'),
+                fetch('/api/v5/liquidity-spikes'),
+                fetch('/api/v5/volume-acceleration'),
+                fetch('/api/v5/holder-growth'),
+              ]);
+              const scores = await scoresResp.json();
+              const clusters = await clustersResp.json();
+              const liq = await liqResp.json();
+              const vol = await volResp.json();
+              const holder = await holderResp.json();
+              const el = document.getElementById('v5-signals');
+              el.innerHTML = `
+                <div class="pill"><div class="label">Smart Wallets</div><div class="value" style="color:#a78bfa">${{clusters.wallets_tracked}}</div></div>
+                <div class="pill"><div class="label">Cluster Events</div><div class="value" style="color:#c084fc">${{clusters.cluster_events.length}}</div></div>
+                <div class="pill"><div class="label">Wallet Signals</div><div class="value">${{clusters.recent_signals}}</div></div>
+                <div class="pill"><div class="label">Liq Spikes</div><div class="value" style="color:#22d3ee">${{liq.spike_events.length}}</div></div>
+                <div class="pill"><div class="label">Vol Spikes</div><div class="value" style="color:#fb923c">${{vol.spike_events.length}}</div></div>
+                <div class="pill"><div class="label">Holder Momentum</div><div class="value" style="color:#34d399">${{holder.momentum_events.length}}</div></div>
+                <div class="pill"><div class="label">Active Signals</div><div class="value">${{scores.active_signals}}</div></div>
+              `;
+            }} catch(e) {{ console.error('V5 signals error', e); }}
+          }}
+          refreshV5Signals();
+          setInterval(refreshV5Signals, 15000);
+
+          // v5: Runner Detection
+          async function refreshV5Runners() {{
+            try {{
+              const resp = await fetch('/api/v5/runner-detection');
+              const data = await resp.json();
+              const el = document.getElementById('v5-runners');
+              if (!data.length) {{
+                el.innerHTML = '<div style="color:#6b7280;text-align:center;padding:1rem;">No open positions to monitor</div>';
+                return;
+              }}
+              let html = '<table><thead><tr><th>Symbol</th><th>Signal Score</th><th>Runner Mode</th><th>Is Runner</th><th>Trail Stop</th><th>Stop@Entry</th></tr></thead><tbody>';
+              data.forEach(r => {{
+                const runnerColor = r.is_runner ? '#22c55e' : r.v5_runner_mode ? '#fbbf24' : '#6b7280';
+                const runnerLabel = r.is_runner ? 'CONFIRMED' : r.v5_runner_mode ? 'MONITORING' : 'OFF';
+                html += `<tr>
+                  <td style="font-weight:600">${{r.symbol}}</td>
+                  <td>${{r.v5_signal_score.toFixed(1)}}</td>
+                  <td style="color:${{runnerColor}};font-weight:600">${{runnerLabel}}</td>
+                  <td>${{r.is_runner ? 'Yes' : 'No'}}</td>
+                  <td>${{r.trailing_stop_level > 0 ? '$' + r.trailing_stop_level.toFixed(6) : '—'}}</td>
+                  <td>${{r.stop_at_entry ? 'Active' : '—'}}</td>
+                </tr>`;
+              }});
+              html += '</tbody></table>';
+              el.innerHTML = html;
+            }} catch(e) {{ console.error('V5 runners error', e); }}
+          }}
+          refreshV5Runners();
+          setInterval(refreshV5Runners, 15000);
+
+          // v5: Signal Performance
+          async function refreshV5Perf() {{
+            try {{
+              const resp = await fetch('/api/v5/signal-performance');
+              const data = await resp.json();
+              const el = document.getElementById('v5-perf');
+              const perf = data.signal_performance || [];
+              const weights = data.current_weights || {{}};
+              if (!perf.length) {{
+                el.innerHTML = '<div style="color:#6b7280;text-align:center;padding:1rem;">No v5 signal performance data yet</div>';
+                return;
+              }}
+              let html = '<div style="margin-bottom:0.8rem;"><span style="font-size:0.78rem;color:#9ca3af;">Current Weights: ';
+              Object.entries(weights).forEach(([k, v]) => {{
+                html += `<span style="margin-right:0.7rem;">${{k}}: <strong style="color:#e5e7eb">${{v}}</strong></span>`;
+              }});
+              html += '</span></div>';
+              html += '<table><thead><tr><th>Signal</th><th>Trades</th><th>Win Rate</th><th>Profit Factor</th><th>Weight</th></tr></thead><tbody>';
+              perf.forEach(p => {{
+                const wrColor = p.win_rate >= 50 ? '#6ee7b7' : '#f87171';
+                const pfColor = p.profit_factor >= 1.5 ? '#6ee7b7' : p.profit_factor >= 1.0 ? '#fbbf24' : '#f87171';
+                html += `<tr>
+                  <td style="font-size:0.8rem;">${{p.signal}}</td>
+                  <td>${{p.trades}}</td>
+                  <td style="color:${{wrColor}}">${{p.win_rate}}%</td>
+                  <td style="color:${{pfColor}}">${{p.profit_factor}}</td>
+                  <td>${{p.current_weight}}</td>
+                </tr>`;
+              }});
+              html += '</tbody></table>';
+              el.innerHTML = html;
+            }} catch(e) {{ console.error('V5 perf error', e); }}
+          }}
+          refreshV5Perf();
+          setInterval(refreshV5Perf, 15000);
 
           // v4: Social Intelligence Overview
           async function refreshSocialIntel() {{

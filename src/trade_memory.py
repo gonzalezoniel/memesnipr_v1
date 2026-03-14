@@ -40,6 +40,12 @@ class TradeMemoryRecord(BaseModel):
     momentum_score: float = 0.0
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
+    # v5: additional fields for signal-level performance tracking
+    v5_signal_score: float = 0.0
+    v5_signal_components: dict[str, float] = Field(default_factory=dict)
+    v5_runner_mode: bool = False
+    v5_entry_reasons: list[str] = Field(default_factory=list)
+
 
 class SetupStats(BaseModel):
     """Aggregated statistics for a specific setup type."""
@@ -58,6 +64,15 @@ class SetupStats(BaseModel):
     score_adjustment: float = 1.0  # multiplier applied to scoring
 
 
+class V5SignalWeights(BaseModel):
+    """v5: Dynamic signal weights adjusted by historical performance."""
+    smart_wallet_cluster: float = 3.0
+    volume_spike: float = 2.0
+    liquidity_injection: float = 2.0
+    holder_acceleration: float = 1.0
+    social_sentiment: float = 1.0
+
+
 class TradeMemory:
     """
     Manages trade memory for self-learning capabilities.
@@ -70,6 +85,8 @@ class TradeMemory:
         self._db_path = db_path or settings.TRADE_MEMORY_PATH
         self._records: list[TradeMemoryRecord] = []
         self._setup_stats: dict[str, SetupStats] = {}
+        self._v5_signal_weights = V5SignalWeights()
+        self._v5_signal_stats: dict[str, SetupStats] = {}  # per-signal type stats
         self._load_db()
 
     def _load_db(self) -> None:
@@ -243,6 +260,100 @@ class TradeMemory:
             parts.append("base_signal")
 
         return "_".join(parts)
+
+    # --- v5: Dynamic Signal Weight Adjustment ---
+
+    def get_v5_signal_weights(self) -> V5SignalWeights:
+        """Get the current v5 signal weights (dynamically adjusted)."""
+        return self._v5_signal_weights
+
+    def record_v5_trade(
+        self,
+        record: TradeMemoryRecord,
+    ) -> None:
+        """Record a v5 trade and update per-signal performance stats."""
+        if not record.v5_signal_components:
+            return
+
+        # Update per-signal stats
+        for signal_name, signal_value in record.v5_signal_components.items():
+            if signal_value <= 0:
+                continue
+            if signal_name not in self._v5_signal_stats:
+                self._v5_signal_stats[signal_name] = SetupStats(
+                    setup_type=f"v5_{signal_name}"
+                )
+            stats = self._v5_signal_stats[signal_name]
+            stats.total_trades += 1
+            if record.pnl_pct >= 0:
+                stats.wins += 1
+                stats.total_profit += record.pnl_sol
+            else:
+                stats.losses += 1
+                stats.total_loss += abs(record.pnl_sol)
+            stats.win_rate = (
+                (stats.wins / stats.total_trades) * 100.0
+                if stats.total_trades > 0 else 0.0
+            )
+            if stats.total_loss > 0:
+                stats.profit_factor = stats.total_profit / stats.total_loss
+            elif stats.total_profit > 0:
+                stats.profit_factor = 999.99
+
+        # Dynamically adjust weights if enough data
+        if settings.V5_DYNAMIC_WEIGHT_ADJUSTMENT:
+            self._adjust_v5_weights()
+
+    def _adjust_v5_weights(self) -> None:
+        """Adjust v5 signal weights based on historical signal performance."""
+        min_trades = settings.V5_MIN_TRADES_FOR_WEIGHT_ADJUST
+        default_weights = V5SignalWeights()
+
+        weight_map = {
+            "smart_wallet_cluster": default_weights.smart_wallet_cluster,
+            "volume_spike": default_weights.volume_spike,
+            "liquidity_injection": default_weights.liquidity_injection,
+            "holder_acceleration": default_weights.holder_acceleration,
+            "social_sentiment": default_weights.social_sentiment,
+        }
+
+        for signal_name, base_weight in weight_map.items():
+            stats = self._v5_signal_stats.get(signal_name)
+            if stats is None or stats.total_trades < min_trades:
+                continue
+
+            # Adjust weight based on profitability
+            if stats.profit_factor >= 2.0 and stats.win_rate >= 60.0:
+                adjusted = min(base_weight * 1.5, base_weight + 2.0)
+            elif stats.profit_factor >= 1.2 and stats.win_rate >= 50.0:
+                adjusted = min(base_weight * 1.2, base_weight + 1.0)
+            elif stats.win_rate < 40.0 or stats.profit_factor < 0.8:
+                adjusted = max(base_weight * 0.5, 0.5)
+            else:
+                adjusted = base_weight
+
+            setattr(self._v5_signal_weights, signal_name, round(adjusted, 2))
+
+        logger.info(
+            "V5 signal weights adjusted: {}",
+            self._v5_signal_weights.model_dump(),
+        )
+
+    def get_v5_signal_performance(self) -> list[dict]:
+        """Get v5 per-signal performance summary for dashboard."""
+        summaries = []
+        for signal_name, stats in self._v5_signal_stats.items():
+            summaries.append({
+                "signal": signal_name,
+                "trades": stats.total_trades,
+                "win_rate": round(stats.win_rate, 1),
+                "profit_factor": round(stats.profit_factor, 2),
+                "current_weight": getattr(
+                    self._v5_signal_weights, signal_name,
+                    0.0,
+                ),
+            })
+        return summaries
 
 
 # Module-level singleton

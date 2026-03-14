@@ -59,6 +59,11 @@ class TokenCandidate(BaseModel):
     holder_growth_rate: float = 0.0  # holders/minute growth
     retracement_depth_pct: float = 0.0  # pullback depth from ATH
 
+    # v5: additional fields for rug protection and signal scoring
+    dev_wallet_pct: float = 0.0           # % of supply owned by dev wallet
+    dev_sold_early: bool = False          # whether dev sold within first 5 min
+    dev_wallet_address: Optional[str] = None
+
 
 class SafetyResult(BaseModel):
     passed: bool
@@ -143,6 +148,13 @@ class Position(BaseModel):
     wallet_cluster_signal: bool = False
     setup_type: str = ""
 
+    # v5: signal scoring and runner detection fields
+    v5_signal_score: float = 0.0
+    v5_signal_components: dict[str, float] = Field(default_factory=dict)
+    v5_runner_mode: bool = False
+    v5_trailing_stop_level: float = 0.0
+    v5_entry_reasons: list[str] = Field(default_factory=list)
+
 
 class TradeLogEntry(BaseModel):
     id: str
@@ -195,6 +207,13 @@ class EngineState(BaseModel):
     # v3: consecutive loss tracking for pause system
     consecutive_losses: int = 0
     pause_until: Optional[datetime] = None
+
+    # v5: signal scoring and runner tracking
+    v5_runner_trades: int = 0
+    v5_cluster_events: int = 0
+    v5_liquidity_spikes: int = 0
+    v5_volume_spikes: int = 0
+    v5_holder_momentum_events: int = 0
 
 
 class AuditRecord(BaseModel):
